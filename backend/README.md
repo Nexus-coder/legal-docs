@@ -8,15 +8,17 @@ A Python pipeline for cleaning Kenyan legal PDF sources (eKLR judgments, Laws of
 
 ```
 backend/
-├── run_cleaner.py              ← CLI entry-point (thin wrapper)
-├── legal_cleaner/              ← Core package
-│   ├── __init__.py             ← Public API re-exports
-│   ├── config.py               ← Settings & logging (reads .env)
-│   ├── extractor.py            ← PDF → raw text (PyMuPDF + pdfplumber)
-│   ├── cleaner.py              ← Regex cleaning passes
-│   └── pipeline.py             ← Orchestration: extract → clean → write
+├── run_cleaner.py              ← Clean raw PDFs into .txt
+├── run_ingestion.py            ← Ingest .txt into Pinecone (RAG)
+├── legal_cleaner/              ← PDF Extraction & Cleaning Package
+├── legal_rag/                  ← RAG Ingestion Package
+│   ├── __init__.py
+│   ├── config.py               ← OpenAI / Pinecone settings
+│   ├── chunker.py              ← Semantic splitting (Orders/Rules)
+│   ├── vectorstore.py          ← Embeddings & Pinecone upload
+│   └── pipeline.py             ← Orchestration
 ├── sources/                    ← Drop raw PDF files here
-├── cleaned/                    ← Cleaned .txt output (auto-created)
+├── cleaned/                    ← Cleaned .txt output
 ├── requirements.txt
 ├── .env / .env.example
 └── .gitignore
@@ -40,11 +42,16 @@ cp .env.example .env
 
 ### Environment Variables
 
-| Variable       | Default    | Description                                   |
-|----------------|------------|-----------------------------------------------|
-| `SOURCES_DIR`  | `sources`  | Directory containing raw source PDFs          |
-| `OUTPUT_DIR`   | `cleaned`  | Directory where cleaned `.txt` files go       |
-| `LOG_LEVEL`    | `INFO`     | Logging verbosity (`DEBUG`, `INFO`, `WARNING`) |
+| Variable              | Default    | Description                                   |
+|-----------------------|------------|-----------------------------------------------|
+| `SOURCES_DIR`         | `sources`  | Directory containing raw source PDFs          |
+| `OUTPUT_DIR`          | `cleaned`  | Directory where cleaned `.txt` files go       |
+| `LOG_LEVEL`           | `INFO`     | Logging verbosity                             |
+| `OPENAI_API_KEY`      | None       | **Required** for RAG embeddings               |
+| `PINECONE_API_KEY`    | None       | **Required** for vector upload                |
+| `PINECONE_INDEX_NAME` | None       | **Required** target Pinecone index name       |
+| `CHUNK_SIZE`          | `1500`     | RAG text splitter max chunk size              |
+| `CHUNK_OVERLAP`       | `150`      | RAG text splitter chunk overlap               |
 
 ---
 
@@ -68,6 +75,21 @@ python run_cleaner.py --file sources/my_document.pdf
 
 ```bash
 python run_cleaner.py --sources-dir /data/pdfs --output-dir /data/clean
+```
+
+### RAG Ingestion (Pinecone)
+
+Once you have your cleaned `.txt` files in `cleaned/`, run the ingestion pipeline. **Ensure your API keys are set in `.env`**.
+
+```bash
+# Dry-run (chunks text without uploading to Pinecone)
+python run_ingestion.py --dry-run
+
+# Ingest all cleaned text
+python run_ingestion.py
+
+# Ingest a single file
+python run_ingestion.py --file cleaned/my_document.txt
 ```
 
 ### Programmatic Usage
