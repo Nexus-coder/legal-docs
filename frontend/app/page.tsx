@@ -1,65 +1,102 @@
-import Image from "next/image";
+import Link from "next/link";
 
-export default function Home() {
+export default function Dashboard() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <section className="p-8">
+      <div className="flex justify-between items-center mb-8">
+        <div>
+          <h2 className="text-3xl font-bold text-slate-900 tracking-tight">Matter Management</h2>
+          <p className="text-slate-500">Manage your active litigation and pleadings</p>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+        <Link href="/pii-masking"
+          className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-bold shadow-lg shadow-blue-200 flex items-center transition">
+          <i className="fas fa-plus mr-2"></i> Quick Start Pleading
+        </Link>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
+          <div className="flex items-center justify-between mb-4">
+            <p className="text-sm font-semibold text-slate-500">Citations Verified</p>
+            <i className="fas fa-check-circle text-green-500"></i>
+          </div>
+          <div className="flex items-end space-x-2">
+            <span className="text-4xl font-bold">142</span>
+            <span className="text-slate-400 mb-1">/ 158 Total</span>
+          </div>
+          <div className="w-full bg-slate-100 h-2 rounded-full mt-4 overflow-hidden">
+            <div className="bg-green-500 h-full w-[90%]"></div>
+          </div>
         </div>
-      </main>
-    </div>
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
+          <div className="flex items-center justify-between mb-4">
+            <p className="text-sm font-semibold text-slate-500">Recent eKLR Matches</p>
+            <i className="fas fa-database text-blue-500"></i>
+          </div>
+          <span className="text-4xl font-bold">24</span>
+          <p className="text-xs text-slate-400 mt-2">+5 new precedents since yesterday</p>
+        </div>
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
+          <div className="flex items-center justify-between mb-4">
+            <p className="text-sm font-semibold text-slate-500">Draft Status</p>
+            <i className="fas fa-file-alt text-amber-500"></i>
+          </div>
+          <div className="flex space-x-4">
+            <div className="text-center"><span className="block text-xl font-bold">8</span><span
+              className="text-[10px] text-slate-400 uppercase">Drafting</span></div>
+            <div className="text-center"><span className="block text-xl font-bold text-blue-600">3</span><span
+              className="text-[10px] text-slate-400 uppercase">Verified</span></div>
+            <div className="text-center"><span className="block text-xl font-bold text-green-600">12</span><span
+              className="text-[10px] text-slate-400 uppercase">Exported</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
+        <div className="p-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
+          <h3 className="font-bold text-slate-700 uppercase text-xs tracking-wider">Active Matters</h3>
+          <div className="flex space-x-2">
+            <input type="text" placeholder="Search Case ID..."
+              className="text-xs px-3 py-1 border rounded-md" />
+          </div>
+        </div>
+        <table className="w-full text-left">
+          <thead className="text-xs uppercase text-slate-400 border-b">
+            <tr>
+              <th className="px-6 py-4">Case ID & Division</th>
+              <th className="px-6 py-4">Status</th>
+              <th className="px-6 py-4">Verification</th>
+              <th className="px-6 py-4">Last Activity</th>
+              <th className="px-6 py-4"></th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            <tr className="hover:bg-slate-50 transition">
+              <td className="px-6 py-4">
+                <p className="font-bold">ELC/E045/2024</p>
+                <p className="text-xs text-slate-500">Environment & Land Court</p>
+              </td>
+              <td className="px-6 py-4">
+                <span className="px-2 py-1 bg-amber-100 text-amber-700 text-[10px] font-bold rounded uppercase tracking-wide">
+                  Drafting
+                </span>
+              </td>
+              <td className="px-6 py-4">
+                <div className="text-xs text-slate-500">4 / 12 Verified</div>
+                <div className="w-24 h-1.5 bg-slate-100 rounded-full mt-1 overflow-hidden">
+                  <div className="bg-amber-400 h-full w-[33%]"></div>
+                </div>
+              </td>
+              <td className="px-6 py-4 text-sm text-slate-500">Retrieved Giella v. Cassman (1973)</td>
+              <td className="px-6 py-4 text-right">
+                <Link href="/drafting" className="text-blue-600 hover:text-blue-800 font-semibold text-sm">
+                  Resume <i className="fas fa-chevron-right ml-1"></i>
+                </Link>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }
