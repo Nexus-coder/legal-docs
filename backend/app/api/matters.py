@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 from typing import List
-from models.domain import Matter
+from app.models.domain import Matter
 
 router = APIRouter()
 

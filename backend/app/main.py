@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api import matters, pii, drafting, admin
+from app.api import matters, pii, drafting, admin
 
 app = FastAPI(title="LegalDocs API", version="1.0.0")
 

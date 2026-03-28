@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from models.domain import DraftingRequest, DraftingResponse, GeneratedBlock
+from app.models.domain import DraftingRequest, DraftingResponse, GeneratedBlock
 
 router = APIRouter()
 

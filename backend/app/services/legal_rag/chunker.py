@@ -9,7 +9,7 @@ from pathlib import Path
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 
-from legal_rag.config import CHUNK_SIZE, CHUNK_OVERLAP
+from app.services.legal_rag.config import CHUNK_SIZE, CHUNK_OVERLAP
 
 def chunk_legal_text(text: str, source_metadata: dict = None) -> list[Document]:
     """

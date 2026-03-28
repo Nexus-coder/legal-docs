@@ -15,8 +15,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from legal_cleaner.extractor import extract_text
-from legal_cleaner.cleaner import clean_legal_text
+from app.services.legal_cleaner.extractor import extract_text
+from app.services.legal_cleaner.cleaner import clean_legal_text
 
 logger = logging.getLogger(__name__)
 

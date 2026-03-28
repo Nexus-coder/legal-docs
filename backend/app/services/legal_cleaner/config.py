@@ -29,8 +29,8 @@ load_dotenv()
 
 # ── Settings ─────────────────────────────────────────────────────────
 
-SOURCES_DIR: Path = Path(os.getenv("SOURCES_DIR", "sources"))
-OUTPUT_DIR: Path = Path(os.getenv("OUTPUT_DIR", "cleaned"))
+SOURCES_DIR: Path = Path(os.getenv("SOURCES_DIR", "data/sources"))
+OUTPUT_DIR: Path = Path(os.getenv("OUTPUT_DIR", "data/cleaned"))
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
 
 # ── Logging bootstrap ────────────────────────────────────────────────

@@ -19,8 +19,11 @@ import sys
 import logging
 from pathlib import Path
 
-from legal_rag.pipeline import ingest_file, ingest_batch
-from legal_cleaner.config import setup_logging, OUTPUT_DIR
+# Add backend root to path so we can resolve `app.services`
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+
+from app.services.legal_rag.pipeline import ingest_file, ingest_batch
+from app.services.legal_cleaner.config import setup_logging, OUTPUT_DIR
 
 def main():
     setup_logging()

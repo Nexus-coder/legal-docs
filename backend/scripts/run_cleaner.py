@@ -26,8 +26,11 @@ import argparse
 import sys
 from pathlib import Path
 
-from legal_cleaner.config import SOURCES_DIR, OUTPUT_DIR, setup_logging
-from legal_cleaner.pipeline import process_pdf, process_batch
+# Add backend root to path so we can resolve `app.services`
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+
+from app.services.legal_cleaner.config import SOURCES_DIR, OUTPUT_DIR, setup_logging
+from app.services.legal_cleaner.pipeline import process_pdf, process_batch
 
 
 def main() -> None:

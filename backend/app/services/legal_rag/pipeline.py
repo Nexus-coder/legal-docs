@@ -5,8 +5,8 @@ pipeline.py – Orchestration for the RAG ingestion process.
 import logging
 from pathlib import Path
 
-from legal_rag.chunker import chunk_file
-from legal_rag.vectorstore import upload_chunks
+from app.services.legal_rag.chunker import chunk_file
+from app.services.legal_rag.vectorstore import upload_chunks
 
 logger = logging.getLogger(__name__)
 

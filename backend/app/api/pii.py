@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from models.domain import MaskRequest, MaskResponse
+from app.models.domain import MaskRequest, MaskResponse
 
 router = APIRouter()
 

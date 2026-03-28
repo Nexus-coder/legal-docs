@@ -8,7 +8,7 @@ import logging
 from langchain_openai import OpenAIEmbeddings
 from langchain_pinecone import PineconeVectorStore
 
-from legal_rag.config import OPENAI_API_KEY, PINECONE_API_KEY, PINECONE_INDEX_NAME
+from app.services.legal_rag.config import OPENAI_API_KEY, PINECONE_API_KEY, PINECONE_INDEX_NAME
 
 logger = logging.getLogger(__name__)
 

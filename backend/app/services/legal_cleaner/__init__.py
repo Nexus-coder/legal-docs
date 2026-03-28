@@ -16,8 +16,8 @@ Quick Start
     process_pdf(Path("sources/my_doc.pdf"), Path("cleaned"))
 """
 
-from legal_cleaner.cleaner import clean_legal_text
-from legal_cleaner.extractor import extract_text
-from legal_cleaner.pipeline import process_pdf
+from app.services.legal_cleaner.cleaner import clean_legal_text
+from app.services.legal_cleaner.extractor import extract_text
+from app.services.legal_cleaner.pipeline import process_pdf
 
 __all__ = ["clean_legal_text", "extract_text", "process_pdf"]
