@@ -1,62 +1,38 @@
 #!/usr/bin/env python3
-"""
-run_ingestion.py – CLI entry-point for the RAG ingestion pipeline.
-
-Usage
------
-    # Dry run against all cleaned texts to verify chunking
-    python run_ingestion.py --dry-run
-    
-    # Ingest all cleaned text files into Pinecone
-    python run_ingestion.py
-
-    # Ingest a single file
-    python run_ingestion.py --file cleaned/my_document.txt
-"""
-
-import argparse
 import sys
-import logging
+import argparse
 from pathlib import Path
 
-# Add backend root to path so we can resolve `app.services`
 sys.path.append(str(Path(__file__).resolve().parent.parent))
+from app.services.ingestion.indexer import index_markdown
 
-from app.services.legal_rag.pipeline import ingest_file, ingest_batch
-from app.services.legal_cleaner.config import setup_logging, OUTPUT_DIR
+OUTPUT_DIR = Path("cleaned")
+
+def ingest_file(file_path: Path):
+    print(f"Indexing {file_path.name} into Pinecone...")
+    text = file_path.read_text(encoding="utf-8")
+    try:
+        nodes_indexed = index_markdown(text, {"source": file_path.name})
+        print(f"Indexed {nodes_indexed} nodes from {file_path.name}.")
+    except Exception as e:
+        print(f"LlamaIndex upload failed: {e}")
 
 def main():
-    setup_logging()
-    
-    parser = argparse.ArgumentParser(
-        description="Ingest cleaned legal text into the Pinecone Vector DB."
-    )
-    parser.add_argument(
-        "--file", "-f",
-        type=Path,
-        help="Path to a single cleaned .txt file to ingest.",
-    )
-    parser.add_argument(
-        "--cleaned-dir", "-c",
-        type=Path,
-        default=OUTPUT_DIR,
-        help=f"Directory containing cleaned .txt files to ingest (default: {OUTPUT_DIR}).",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Run chunking but skip embedding and uploading to Pinecone.",
-    )
+    parser = argparse.ArgumentParser(description="Ingest Markdown into Pinecone via LlamaIndex.")
+    parser.add_argument("--file", "-f", type=Path, help="Single .md file to ingest.")
+    parser.add_argument("--cleaned-dir", "-c", type=Path, default=OUTPUT_DIR)
     args = parser.parse_args()
 
     if args.file:
-        if not args.file.exists():
-            print(f"Error: file not found – {args.file}", file=sys.stderr)
-            sys.exit(1)
-        ingest_file(args.file, dry_run=args.dry_run)
+        ingest_file(args.file)
         return
 
-    ingest_batch(args.cleaned_dir, dry_run=args.dry_run)
+    if not args.cleaned_dir.exists():
+        print(f"Directory {args.cleaned_dir} does not exist.")
+        sys.exit(1)
+        
+    for file_path in args.cleaned_dir.glob("*.md"):
+        ingest_file(file_path)
 
 if __name__ == "__main__":
     main()

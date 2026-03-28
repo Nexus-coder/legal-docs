@@ -1,77 +1,41 @@
 #!/usr/bin/env python3
-"""
-run_cleaner.py – CLI entry-point for the legal-text cleaning pipeline.
-
-This is a thin wrapper around :mod:`legal_cleaner`.  All business logic
-lives inside the ``legal_cleaner`` package; this file only handles
-argument parsing and logging setup.
-
-Usage
------
-    # Batch-process every PDF in sources/
-    python run_cleaner.py
-
-    # Process a single PDF
-    python run_cleaner.py --file sources/my_document.pdf
-
-    # Override directories via CLI flags
-    python run_cleaner.py --sources-dir /data/pdfs --output-dir /data/clean
-
-    # Or set them in .env (see .env.example)
-"""
-
-from __future__ import annotations
-
-import argparse
 import sys
+import argparse
 from pathlib import Path
 
-# Add backend root to path so we can resolve `app.services`
 sys.path.append(str(Path(__file__).resolve().parent.parent))
+from app.services.ingestion.parser import parse_document
 
-from app.services.legal_cleaner.config import SOURCES_DIR, OUTPUT_DIR, setup_logging
-from app.services.legal_cleaner.pipeline import process_pdf, process_batch
+SOURCES_DIR = Path("sources")
+OUTPUT_DIR = Path("cleaned")
 
+def process_file(file_path: Path, output_dir: Path):
+    try:
+        print(f"Parsing {file_path.name} with MarkItDown...")
+        markdown_text = parse_document(str(file_path))
+        output_file = output_dir / f"{file_path.stem}.md"
+        output_file.write_text(markdown_text, encoding="utf-8")
+        print(f"Saved cleanly to {output_file}")
+    except Exception as e:
+        print(f"Failed to parse {file_path.name}: {e}")
 
-def main() -> None:
-    """Parse CLI arguments and run the appropriate pipeline mode."""
-    setup_logging()
-
-    parser = argparse.ArgumentParser(
-        description="Clean Kenyan legal PDF text for RAG ingestion.",
-    )
-    parser.add_argument(
-        "--file", "-f",
-        type=Path,
-        help="Path to a single PDF to process (skip batch mode).",
-    )
-    parser.add_argument(
-        "--sources-dir", "-s",
-        type=Path,
-        default=SOURCES_DIR,
-        help=f"Directory containing source PDFs (default: {SOURCES_DIR}).",
-    )
-    parser.add_argument(
-        "--output-dir", "-o",
-        type=Path,
-        default=OUTPUT_DIR,
-        help=f"Directory for cleaned output (default: {OUTPUT_DIR}).",
-    )
+def main():
+    parser = argparse.ArgumentParser(description="Convert docs to LLM-ready Markdown using MarkItDown.")
+    parser.add_argument("--file", "-f", type=Path, help="Single file to process.")
+    parser.add_argument("--sources-dir", "-s", type=Path, default=SOURCES_DIR)
+    parser.add_argument("--output-dir", "-o", type=Path, default=OUTPUT_DIR)
     args = parser.parse_args()
 
-    # ── Single-file mode ─────────────────────────────────────────────
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+
     if args.file:
-        if not args.file.exists():
-            print(f"Error: file not found – {args.file}", file=sys.stderr)
-            sys.exit(1)
-        process_pdf(args.file, args.output_dir)
+        process_file(args.file, args.output_dir)
         return
 
-    # ── Batch mode ───────────────────────────────────────────────────
-    results = process_batch(args.sources_dir, args.output_dir)
-    if not results:
-        sys.exit(0)
-
+    args.sources_dir.mkdir(parents=True, exist_ok=True)
+    for file_path in args.sources_dir.glob("*"):
+        if file_path.is_file():
+            process_file(file_path, args.output_dir)
 
 if __name__ == "__main__":
     main()
