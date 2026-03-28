@@ -1,4 +1,45 @@
-export default function DraftingWorkspace() {
+import { API_BASE_URL } from "@/lib/api";
+
+async function getDraft() {
+  try {
+    const res = await fetch(`${API_BASE_URL}drafting/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jurisdiction: "Environment & Land Court",
+        subcategory: "Adverse Possession",
+        instructions: "Draft grounds for adverse possession claim."
+      }),
+      next: { revalidate: 0 }
+    });
+    if (!res.ok) return { blocks: [] };
+    return res.json();
+  } catch (e) {
+    return { blocks: [] };
+  }
+}
+
+async function getCitations() {
+  try {
+    const res = await fetch(`${API_BASE_URL}drafting/citations`, { next: { revalidate: 0 } });
+    if (!res.ok) return null;
+    return res.json();
+  } catch (e) {
+    return null;
+  }
+}
+
+export default async function DraftingWorkspace() {
+  const [draftData, citation] = await Promise.all([
+    getDraft(),
+    getCitations()
+  ]);
+
+  const block = draftData?.blocks?.[0] || {
+    title: "GROUND 1: ADVERSE POSSESSION",
+    content: "The Plaintiff has been in open, notorious, and continuous possession of [LAND_ID_1] for a period exceeding 12 years without the consent of the Registered Owner, meeting the threshold under Section 7 of the Limitation of Actions Act.",
+  };
+
   return (
     <section className="flex-1 flex h-full overflow-hidden">
       <div className="w-1/3 border-r border-slate-200 bg-white flex flex-col">
@@ -16,13 +57,8 @@ export default function DraftingWorkspace() {
               Pleading Block: Grounds
             </h4>
             <div className="space-y-4 text-sm leading-relaxed text-slate-700">
-              <p className="font-bold border-b pb-1">GROUND 1: ADVERSE POSSESSION</p>
-              <p>
-                The Plaintiff has been in open, notorious, and continuous possession of{" "}
-                <span className="bg-blue-200 rounded px-1">[LAND_ID_1]</span> for a period
-                exceeding 12 years without the consent of the Registered Owner, meeting the
-                threshold under <strong>Section 7 of the Limitation of Actions Act</strong>.
-              </p>
+              <p className="font-bold border-b pb-1">{block.title}</p>
+              <p>{block.content}</p>
             </div>
           </div>
           <div className="p-4 border border-slate-200 rounded-lg bg-white shadow-sm opacity-50 grayscale">
@@ -47,26 +83,26 @@ export default function DraftingWorkspace() {
         </div>
         <div className="flex-1 p-8 overflow-y-auto">
           <div className="max-w-2xl mx-auto bg-white p-10 shadow-lg min-h-full border-t-4 border-amber-400">
-            <div className="text-center mb-8">
-              <h5 className="font-serif text-lg font-bold">REPUBLIC OF KENYA</h5>
-              <p className="font-serif text-sm">IN THE ENVIRONMENT AND LAND COURT AT NAIROBI</p>
-              <div className="border-y my-4 py-2 uppercase text-xs font-bold">
-                Giella v. Cassman Brown & Co. Ltd [1973] EA 358
-              </div>
-            </div>
-            <div className="font-serif text-sm leading-relaxed space-y-4">
-              <p className="font-bold">HELD:</p>
-              <p>
-                "The conditions for the grant of an interlocutory injunction are now well
-                settled in East Africa; first, an applicant must show a prima facie case with a
-                probability of success. Secondly, an interlocutory injunction will not
-                normally be granted unless the applicant might otherwise suffer irreparable
-                injury..."
-              </p>
-              <p className="text-slate-400 italic mt-8 border-t pt-4">
-                This section was used to generate Block #2 (Injunction Prayers).
-              </p>
-            </div>
+            {citation ? (
+              <>
+                <div className="text-center mb-8">
+                  <h5 className="font-serif text-lg font-bold">REPUBLIC OF KENYA</h5>
+                  <p className="font-serif text-sm">{citation.court}</p>
+                  <div className="border-y my-4 py-2 uppercase text-xs font-bold">
+                    {citation.title}
+                  </div>
+                </div>
+                <div className="font-serif text-sm leading-relaxed space-y-4">
+                  <p className="font-bold">HELD:</p>
+                  <p>{citation.held}</p>
+                  <p className="text-slate-400 italic mt-8 border-t pt-4">
+                    This section was used to generate Block #1 (Grounds).
+                  </p>
+                </div>
+              </>
+            ) : (
+                <div className="text-center text-slate-500 py-20">Loading Citations...</div>
+            )}
           </div>
         </div>
       </div>
@@ -101,7 +137,7 @@ export default function DraftingWorkspace() {
               <span className="text-[10px] font-bold text-blue-700 uppercase">Precedent</span>
               <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
             </div>
-            <p className="text-xs font-bold mb-1">Giella v. Cassman Brown [1973]</p>
+            <p className="text-xs font-bold mb-1">{citation?.title?.split('[')[0] || "Giella v. Cassman Brown"}</p>
             <p className="text-[10px] text-slate-600 mb-3">Matching Confidence: 94%</p>
             <button className="w-full py-1.5 bg-blue-600 text-white text-xs font-bold rounded shadow-md hover:bg-blue-700">
               Verify & Approve

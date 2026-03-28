@@ -1,6 +1,22 @@
 import Link from "next/link";
+import { API_BASE_URL } from "@/lib/api";
 
-export default function Dashboard() {
+async function getStats() {
+  const res = await fetch(`${API_BASE_URL}stats`, { next: { revalidate: 0 } });
+  if (!res.ok) throw new Error("Failed to fetch stats");
+  return res.json();
+}
+
+async function getMatters() {
+  const res = await fetch(`${API_BASE_URL}matters/`, { next: { revalidate: 0 } });
+  if (!res.ok) throw new Error("Failed to fetch matters");
+  return res.json();
+}
+
+export default async function Dashboard() {
+  const stats = await getStats();
+  const matters = await getMatters();
+
   return (
     <section className="p-8">
       <div className="flex justify-between items-center mb-8">
@@ -21,11 +37,11 @@ export default function Dashboard() {
             <i className="fas fa-check-circle text-green-500"></i>
           </div>
           <div className="flex items-end space-x-2">
-            <span className="text-4xl font-bold">142</span>
-            <span className="text-slate-400 mb-1">/ 158 Total</span>
+            <span className="text-4xl font-bold">{stats.citations_verified.current}</span>
+            <span className="text-slate-400 mb-1">/ {stats.citations_verified.total} Total</span>
           </div>
           <div className="w-full bg-slate-100 h-2 rounded-full mt-4 overflow-hidden">
-            <div className="bg-green-500 h-full w-[90%]"></div>
+            <div className="bg-green-500 h-full" style={{ width: `${(stats.citations_verified.current / stats.citations_verified.total) * 100}%` }}></div>
           </div>
         </div>
         <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
@@ -33,7 +49,7 @@ export default function Dashboard() {
             <p className="text-sm font-semibold text-slate-500">Recent eKLR Matches</p>
             <i className="fas fa-database text-blue-500"></i>
           </div>
-          <span className="text-4xl font-bold">24</span>
+          <span className="text-4xl font-bold">{stats.recent_matches}</span>
           <p className="text-xs text-slate-400 mt-2">+5 new precedents since yesterday</p>
         </div>
         <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
@@ -42,11 +58,11 @@ export default function Dashboard() {
             <i className="fas fa-file-alt text-amber-500"></i>
           </div>
           <div className="flex space-x-4">
-            <div className="text-center"><span className="block text-xl font-bold">8</span><span
+            <div className="text-center"><span className="block text-xl font-bold">{stats.draft_status.drafting}</span><span
               className="text-[10px] text-slate-400 uppercase">Drafting</span></div>
-            <div className="text-center"><span className="block text-xl font-bold text-blue-600">3</span><span
+            <div className="text-center"><span className="block text-xl font-bold text-blue-600">{stats.draft_status.verified}</span><span
               className="text-[10px] text-slate-400 uppercase">Verified</span></div>
-            <div className="text-center"><span className="block text-xl font-bold text-green-600">12</span><span
+            <div className="text-center"><span className="block text-xl font-bold text-green-600">{stats.draft_status.exported}</span><span
               className="text-[10px] text-slate-400 uppercase">Exported</span></div>
           </div>
         </div>
@@ -71,29 +87,31 @@ export default function Dashboard() {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            <tr className="hover:bg-slate-50 transition">
-              <td className="px-6 py-4">
-                <p className="font-bold">ELC/E045/2024</p>
-                <p className="text-xs text-slate-500">Environment & Land Court</p>
-              </td>
-              <td className="px-6 py-4">
-                <span className="px-2 py-1 bg-amber-100 text-amber-700 text-[10px] font-bold rounded uppercase tracking-wide">
-                  Drafting
-                </span>
-              </td>
-              <td className="px-6 py-4">
-                <div className="text-xs text-slate-500">4 / 12 Verified</div>
-                <div className="w-24 h-1.5 bg-slate-100 rounded-full mt-1 overflow-hidden">
-                  <div className="bg-amber-400 h-full w-[33%]"></div>
-                </div>
-              </td>
-              <td className="px-6 py-4 text-sm text-slate-500">Retrieved Giella v. Cassman (1973)</td>
-              <td className="px-6 py-4 text-right">
-                <Link href="/drafting" className="text-blue-600 hover:text-blue-800 font-semibold text-sm">
-                  Resume <i className="fas fa-chevron-right ml-1"></i>
-                </Link>
-              </td>
-            </tr>
+            {matters.map((matter: any) => (
+              <tr key={matter.id} className="hover:bg-slate-50 transition">
+                <td className="px-6 py-4">
+                  <p className="font-bold">{matter.id}</p>
+                  <p className="text-xs text-slate-500">{matter.division}</p>
+                </td>
+                <td className="px-6 py-4">
+                  <span className={`px-2 py-1 ${matter.status === 'Drafting' ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-700'} text-[10px] font-bold rounded uppercase tracking-wide`}>
+                    {matter.status}
+                  </span>
+                </td>
+                <td className="px-6 py-4">
+                  <div className="text-xs text-slate-500">{matter.verification_done} / {matter.verification_total} Verified</div>
+                  <div className="w-24 h-1.5 bg-slate-100 rounded-full mt-1 overflow-hidden">
+                    <div className="bg-amber-400 h-full" style={{ width: `${(matter.verification_done / matter.verification_total) * 100}%` }}></div>
+                  </div>
+                </td>
+                <td className="px-6 py-4 text-sm text-slate-500">{matter.last_activity}</td>
+                <td className="px-6 py-4 text-right">
+                  <Link href="/drafting" className="text-blue-600 hover:text-blue-800 font-semibold text-sm">
+                    Resume <i className="fas fa-chevron-right ml-1"></i>
+                  </Link>
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
