@@ -8,15 +8,18 @@ A Python pipeline for cleaning Kenyan legal PDF sources (eKLR judgments, Laws of
 
 ```
 backend/
-├── run_cleaner.py              ← Clean raw PDFs into .txt
-├── run_ingestion.py            ← Ingest .txt into Pinecone (RAG)
+├── src/                        ← FastAPI Domain-based application
+│   ├── main.py                 ← API Entrypoint
+│   ├── config.py               ← pydantic-settings configuration
+│   ├── database.py             ← SQLAlchemy session management
+│   ├── matters/                ← Matters Domain
+│   ├── drafting/               ← Drafting Domain
+│   └── ...
+├── scripts/                    ← Utility scripts
+│   ├── run_cleaner.py          ← Clean raw PDFs into .txt
+│   └── run_ingestion.py        ← Ingest .txt into Pinecone (RAG)
 ├── legal_cleaner/              ← PDF Extraction & Cleaning Package
 ├── legal_rag/                  ← RAG Ingestion Package
-│   ├── __init__.py
-│   ├── config.py               ← OpenAI / Pinecone settings
-│   ├── chunker.py              ← Semantic splitting (Orders/Rules)
-│   ├── vectorstore.py          ← Embeddings & Pinecone upload
-│   └── pipeline.py             ← Orchestration
 ├── sources/                    ← Drop raw PDF files here
 ├── cleaned/                    ← Cleaned .txt output
 ├── requirements.txt
@@ -62,19 +65,19 @@ cp .env.example .env
 Process every `.pdf` in `sources/`:
 
 ```bash
-python run_cleaner.py
+python scripts/run_cleaner.py
 ```
 
 ### Single File
 
 ```bash
-python run_cleaner.py --file sources/my_document.pdf
+python scripts/run_cleaner.py --file sources/my_document.pdf
 ```
 
 ### Custom Directories
 
 ```bash
-python run_cleaner.py --sources-dir /data/pdfs --output-dir /data/clean
+python scripts/run_cleaner.py --sources-dir /data/pdfs --output-dir /data/clean
 ```
 
 ### RAG Ingestion (Pinecone)
@@ -83,13 +86,13 @@ Once you have your cleaned `.txt` files in `cleaned/`, run the ingestion pipelin
 
 ```bash
 # Dry-run (chunks text without uploading to Pinecone)
-python run_ingestion.py --dry-run
+python scripts/run_ingestion.py --dry-run
 
 # Ingest all cleaned text
-python run_ingestion.py
+python scripts/run_ingestion.py
 
 # Ingest a single file
-python run_ingestion.py --file cleaned/my_document.txt
+python scripts/run_ingestion.py --file cleaned/my_document.txt
 ```
 
 ### Programmatic Usage

@@ -39,14 +39,16 @@ The project is split into two primary environments:
 ```text
 legal-docs/
 ├── backend/                  
-│   ├── app/                  ← FastAPI application modular routers & models 
+│   ├── src/                  ← Domain-based application logic
 │   │   ├── main.py           ← FastAPI entrypoint
-│   │   ├── api/              ← Route handlers (drafting, matters, pii, admin)
+│   │   ├── matters/          ← Matter management domain
+│   │   ├── pii/              ← PII redaction domain
+│   │   ├── drafting/         ← Drafting workspace domain
+│   │   ├── admin/            ← Admin console domain
 │   │   └── ...
 │   ├── legal_cleaner/        ← 8-pass PDF Extraction & Cleaning Package
 │   ├── legal_rag/            ← Pinecone Vector Database & Langchain Ingestion Package
-│   ├── run_cleaner.py        ← Script to clean raw PDFs into .txt
-│   ├── run_ingestion.py      ← Script to upload .txt into Pinecone (RAG)
+│   ├── scripts/              ← Standalone utility scripts
 │   └── requirements.txt      ← Python dependency definitions
 └── frontend/                 
     ├── app/                  ← Next.js App Router pages
@@ -80,7 +82,7 @@ pip install -r requirements.txt
 cp .env.example .env
 
 # Run the FastAPI Server
-uvicorn app.main:app --reload --port 8000
+uvicorn src.main:app --reload --port 8000
 ```
 > **Note**: For data processing jobs like PDF cleaning and Pinecone ingestion, use the standalone scripts: `python run_cleaner.py` and `python run_ingestion.py`. (*See `backend/README.md` for extended documentation on the ingestion pipeline.*)
 
