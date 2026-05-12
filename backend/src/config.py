@@ -22,6 +22,7 @@ class Settings(BaseSettings):
 
     # Environment
     ENVIRONMENT: str = "local"
+    DATABASE_URL: str = "sqlite+aiosqlite:///./legal_docs.db"
 
 
 settings = Settings()

@@ -1,12 +1,31 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from src.config import settings
+from src.database import engine
+from src.models import Base
+from src.auth import router as auth_router
+from src.auth.models import User  # Registered with Base
 from src.matters import router as matters_router
 from src.pii import router as pii_router
 from src.drafting import router as drafting_router
 from src.admin import router as admin_router
 
-app_kwargs = {"title": "LegalDocs API", "version": "1.0.0"}
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Create tables on startup (local dev only)
+    if settings.ENVIRONMENT == "local":
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+    yield
+
+
+app_kwargs = {
+    "title": "LegalDocs API",
+    "version": "1.0.0",
+    "lifespan": lifespan,
+}
 
 # Hide docs outside selected envs as per AGENTS.md
 SHOW_DOCS_IN = {"local", "staging"}
@@ -24,6 +43,7 @@ app.add_middleware(
 )
 
 # Domain routers
+app.include_router(auth_router.router, prefix="/api/auth", tags=["Authentication"])
 app.include_router(matters_router.router, prefix="/api/matters", tags=["Matters"])
 app.include_router(pii_router.router, prefix="/api/pii", tags=["PII Masking"])
 app.include_router(

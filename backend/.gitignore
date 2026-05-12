@@ -5,9 +5,16 @@ venv/
 __pycache__/
 *.pyc
 *.pyo
+.ruff_cache/
 
 # Environment secrets
 .env
 
 # Generated output
 cleaned/
+
+# Database
+*.db
+
+# IDEs
+.vscode/
