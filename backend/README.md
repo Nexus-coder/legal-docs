@@ -1,30 +1,60 @@
-# Legal Text Cleaner
+# LegalDocs Backend
 
-A Python pipeline for cleaning Kenyan legal PDF sources (eKLR judgments, Laws of Kenya statutes) before ingesting them into a **RAG pipeline**.
+FastAPI server for the LegalDocs platform — domain-driven, async-first, and built around Kenyan legal data workflows.
+
+| Component | Technology |
+|-----------|-----------|
+| Framework | FastAPI 0.136 · Pydantic v2 · pydantic-settings |
+| Database | SQLAlchemy 2.0 (async) · SQLite via aiosqlite (dev) |
+| Auth | PyJWT · passlib (bcrypt) |
+| PII | OpenAI Privacy Filter (Hugging Face transformers) |
+| RAG | LangChain · LangGraph · Pinecone · OpenAI embeddings |
+| PDF Processing | PyMuPDF · pdfplumber |
+| Linting | Ruff (replaces black + isort + flake8) |
 
 ---
 
 ## Project Structure
 
-```
+```text
 backend/
-├── src/                        ← FastAPI Domain-based application
-│   ├── main.py                 ← API Entrypoint
-│   ├── config.py               ← pydantic-settings configuration
-│   ├── database.py             ← SQLAlchemy session management
-│   ├── matters/                ← Matters Domain
-│   ├── drafting/               ← Drafting Domain
-│   └── ...
-├── scripts/                    ← Utility scripts
-│   ├── run_cleaner.py          ← Clean raw PDFs into .txt
-│   └── run_ingestion.py        ← Ingest .txt into Pinecone (RAG)
-├── legal_cleaner/              ← PDF Extraction & Cleaning Package
-├── legal_rag/                  ← RAG Ingestion Package
-├── sources/                    ← Drop raw PDF files here
-├── cleaned/                    ← Cleaned .txt output
+├── src/                            ← Domain-driven application
+│   ├── main.py                     ← FastAPI app + lifespan
+│   ├── config.py                   ← Global BaseSettings
+│   ├── database.py                 ← Async engine + session factory
+│   ├── models.py                   ← Shared ORM Base + Pydantic base
+│   ├── exceptions.py               ← Global exception classes
+│   │
+│   ├── auth/                       ← Authentication domain
+│   │   ├── config.py               ← AuthConfig (JWT_SECRET, etc.)
+│   │   ├── models.py               ← User ORM model
+│   │   ├── schemas.py              ← UserCreate, UserRead, Token
+│   │   ├── service.py              ← Password hashing, token creation
+│   │   ├── dependencies.py         ← get_current_user (JWT validation)
+│   │   └── router.py               ← /signup, /login, /me
+│   │
+│   ├── pii/                        ← PII detection & masking domain
+│   │   ├── config.py               ← PiiConfig (model name, device, threshold)
+│   │   ├── schemas.py              ← PiiEntity, DetectRequest, MaskResponse
+│   │   ├── service.py              ← Privacy Filter pipeline (lazy-loaded)
+│   │   └── router.py               ← /detect, /mask
+│   │
+│   ├── matters/                    ← Matter management domain
+│   ├── drafting/                   ← AI-assisted drafting domain
+│   ├── admin/                      ← Admin console domain
+│   ├── agent/                      ← LangGraph agent orchestration
+│   ├── ingestion/                  ← Document parsing & indexing
+│   ├── legal_cleaner/              ← 8-pass PDF text cleaning
+│   └── legal_rag/                  ← Pinecone vector ingestion
+│
+├── scripts/
+│   ├── run_cleaner.py              ← Batch PDF → .txt cleaning
+│   └── run_ingestion.py            ← .txt → Pinecone vector upload
+│
 ├── requirements.txt
-├── .env / .env.example
-└── .gitignore
+├── .env.example
+├── .gitignore
+└── AGENTS.md                       ← AI agent coding guidelines
 ```
 
 ---
@@ -33,59 +63,138 @@ backend/
 
 ```bash
 # 1. Create and activate a virtual environment
-python3 -m venv venv
-source venv/bin/activate
+python -m venv venv
+source venv/bin/activate            # Linux / macOS
+.\venv\Scripts\activate              # Windows
 
 # 2. Install dependencies
 pip install -r requirements.txt
 
-# 3. Copy and customise environment variables
-cp .env.example .env
+# 3. Configure environment
+cp .env.example .env                 # Then fill in your API keys
+
+# 4. Start the server
+uvicorn src.main:app --reload --port 8000
 ```
 
-### Environment Variables
-
-| Variable              | Default    | Description                                   |
-|-----------------------|------------|-----------------------------------------------|
-| `SOURCES_DIR`         | `sources`  | Directory containing raw source PDFs          |
-| `OUTPUT_DIR`          | `cleaned`  | Directory where cleaned `.txt` files go       |
-| `LOG_LEVEL`           | `INFO`     | Logging verbosity                             |
-| `OPENAI_API_KEY`      | None       | **Required** for RAG embeddings               |
-| `PINECONE_API_KEY`    | None       | **Required** for vector upload                |
-| `PINECONE_INDEX_NAME` | None       | **Required** target Pinecone index name       |
-| `CHUNK_SIZE`          | `1500`     | RAG text splitter max chunk size              |
-| `CHUNK_OVERLAP`       | `150`      | RAG text splitter chunk overlap               |
+> **Auto-init**: When `ENVIRONMENT=local`, the server creates all SQLite tables and the `legal_docs.db` file on startup automatically.
 
 ---
 
-## Usage
+## API Endpoints
 
-### Batch Mode (default)
+Interactive Swagger docs: [http://localhost:8000/docs](http://localhost:8000/docs)
 
-Process every `.pdf` in `sources/`:
+### Authentication (`/api/auth`)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/signup` | Register a new user |
+| `POST` | `/login` | Get a JWT access token (OAuth2 form) |
+| `GET` | `/me` | Get current authenticated user |
+
+### PII Masking (`/api/pii`)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/detect` | Detect PII entities (returns spans + scores) |
+| `POST` | `/mask` | Detect PII and replace with `[ENTITY_TYPE]` placeholders |
+
+**Example — detect:**
+```bash
+curl -X POST http://localhost:8000/api/pii/detect \
+  -H "Content-Type: application/json" \
+  -d '{"text": "My name is Alice Smith and my email is alice@lawfirm.co.ke"}'
+```
+
+**Response:**
+```json
+{
+  "entities": [
+    {"entity_type": "private_person", "text": "Alice Smith", "start": 11, "end": 22, "score": 0.9999},
+    {"entity_type": "private_email", "text": "alice@lawfirm.co.ke", "start": 42, "end": 61, "score": 0.9999}
+  ],
+  "entity_count": 2
+}
+```
+
+### Other Domains
+
+| Prefix | Domain | Description |
+|--------|--------|-------------|
+| `/api/matters` | Matters | Legal case CRUD and status tracking |
+| `/api/drafting` | Drafting | AI-assisted pleading drafting workspace |
+| `/api/admin` | Admin | System administration |
+| `/api/stats` | Dashboard | Aggregated statistics |
+
+---
+
+## Environment Variables
+
+### Global (`src/config.py`)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ENVIRONMENT` | `local` | `local` · `staging` · `production` |
+| `DATABASE_URL` | `sqlite+aiosqlite:///./legal_docs.db` | Async database connection string |
+| `OPENAI_API_KEY` | — | **Required** for RAG embeddings |
+| `PINECONE_API_KEY` | — | **Required** for vector storage |
+| `PINECONE_INDEX_NAME` | `legal-docs` | Pinecone index name |
+| `CHUNK_SIZE` | `1500` | RAG text splitter chunk size |
+| `CHUNK_OVERLAP` | `150` | RAG text splitter overlap |
+| `SOURCES_DIR` | `sources` | Raw PDF input directory |
+| `OUTPUT_DIR` | `cleaned` | Cleaned .txt output directory |
+
+### Auth (`src/auth/config.py` — prefix `AUTH_`)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AUTH_JWT_SECRET` | `super-secret-dev-key` | JWT signing secret (**change in production**) |
+| `AUTH_JWT_ALG` | `HS256` | JWT signing algorithm |
+| `AUTH_JWT_EXP_MINUTES` | `1440` | Token expiration (24 hours) |
+
+### PII (`src/pii/config.py` — prefix `PII_`)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PII_MODEL_NAME` | `openai/privacy-filter` | Hugging Face model identifier |
+| `PII_DEVICE` | `cpu` | Inference device (`cpu` or `cuda`) |
+| `PII_CONFIDENCE_THRESHOLD` | `0.5` | Minimum confidence to report an entity |
+
+---
+
+## Data Processing Scripts
+
+### PDF Cleaning
 
 ```bash
+# Batch — process all PDFs in sources/
 python scripts/run_cleaner.py
-```
 
-### Single File
-
-```bash
+# Single file
 python scripts/run_cleaner.py --file sources/my_document.pdf
-```
 
-### Custom Directories
-
-```bash
+# Custom directories
 python scripts/run_cleaner.py --sources-dir /data/pdfs --output-dir /data/clean
 ```
 
+The cleaner applies **8 sequential passes**:
+
+| # | Pass | Example noise removed |
+|---|------|-----------------------|
+| 1 | Strip URLs | `http://www.kenyalaw.org` |
+| 2 | Strip page numbers | `Page 3 of 14`, `– 3 –` |
+| 3 | Strip eKLR boilerplate | `Kenya Law Reports`, `National Council for Law Reporting` |
+| 4 | Strip case-number stamps | `ELC Case No. 123 of 2022` |
+| 5 | Strip legislation headers | `Rev. Edition 2009`, `Cap. 21` |
+| 6 | Remove invisible Unicode | Zero-width spaces, BOMs, soft hyphens |
+| 7 | NFC Unicode normalisation | Compose diacritics, canonical ordering |
+| 8 | Collapse whitespace | Multiple spaces → 1, 3+ newlines → paragraph break |
+
 ### RAG Ingestion (Pinecone)
 
-Once you have your cleaned `.txt` files in `cleaned/`, run the ingestion pipeline. **Ensure your API keys are set in `.env`**.
-
 ```bash
-# Dry-run (chunks text without uploading to Pinecone)
+# Dry-run (chunks text without uploading)
 python scripts/run_ingestion.py --dry-run
 
 # Ingest all cleaned text
@@ -95,48 +204,13 @@ python scripts/run_ingestion.py
 python scripts/run_ingestion.py --file cleaned/my_document.txt
 ```
 
-### Programmatic Usage
-
-```python
-from legal_cleaner import process_pdf
-from pathlib import Path
-
-process_pdf(Path("sources/my_doc.pdf"), Path("cleaned"))
-```
-
-Or use individual components:
-
-```python
-from legal_cleaner import extract_text, clean_legal_text
-
-raw = extract_text("sources/my_doc.pdf")
-clean = clean_legal_text(raw)
-```
-
 ---
 
-## Cleaning Pipeline
+## Linting & Formatting
 
-The cleaner applies **8 sequential passes** in `legal_cleaner/cleaner.py`:
+```bash
+ruff check --fix src
+ruff format src
+```
 
-| # | Pass                          | Example noise removed                              |
-|---|-------------------------------|-----------------------------------------------------|
-| 1 | Strip URLs                    | `http://www.kenyalaw.org`                           |
-| 2 | Strip page numbers            | `Page 3 of 14`, `– 3 –`, lone `42`                 |
-| 3 | Strip eKLR boilerplate        | `Kenya Law Reports`, `National Council for Law Reporting` |
-| 4 | Strip case-number stamps      | `ELC Case No. 123 of 2022`                         |
-| 5 | Strip legislation headers     | `Rev. Edition 2009`, `Cap. 21`, `Laws of Kenya`    |
-| 6 | Remove invisible Unicode      | Zero-width spaces, BOMs, soft hyphens               |
-| 7 | NFC Unicode normalisation     | Compose diacritics, canonical ordering              |
-| 8 | Collapse whitespace           | Multiple spaces → 1, 3+ newlines → paragraph break |
-
----
-
-## Extraction Strategy
-
-`legal_cleaner/extractor.py` uses a two-backend approach:
-
-1. **PyMuPDF** (`fitz`) — fast, C-based, handles most standard PDFs.
-2. **pdfplumber** — automatic fallback when PyMuPDF yields very little text (scanned pages, unusual font encodings).
-
-The quality gate checks average characters per page; if below threshold, pdfplumber is used instead.
+See [AGENTS.md](./AGENTS.md) for the full coding guidelines used in this project.
