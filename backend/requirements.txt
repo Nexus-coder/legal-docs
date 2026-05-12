@@ -22,3 +22,5 @@ passlib[bcrypt]>=1.7.4
 bcrypt>=4.0.1
 email-validator>=2.0.0
 python-multipart>=0.0.12
+transformers>=4.45.0
+torch --index-url https://download.pytorch.org/whl/cpu
