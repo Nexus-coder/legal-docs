@@ -7,11 +7,15 @@ class UserBase(CustomBaseModel):
 
 
 class UserCreate(UserBase):
+    full_name: str | None = None
+    firm_name: str | None = None
     password: str = Field(min_length=8, max_length=128)
 
 
 class UserRead(UserBase):
     id: int
+    full_name: str | None = None
+    firm_name: str | None = None
     is_active: bool
 
     model_config = ConfigDict(from_attributes=True)

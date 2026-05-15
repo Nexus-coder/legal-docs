@@ -47,14 +47,26 @@ export default function Sidebar() {
         </div>
       </nav>
       <div className="p-4 border-t border-slate-800">
-        <div className="flex items-center space-x-3">
-          <div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center text-white font-bold">
-            JD
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-3">
+            <div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center text-white font-bold">
+              JD
+            </div>
+            <div className="text-xs">
+              <p className="font-bold text-white">Advocate J. Doe</p>
+              <p className="text-slate-500">Law Society ID: 4501</p>
+            </div>
           </div>
-          <div className="text-xs">
-            <p className="font-bold text-white">Advocate J. Doe</p>
-            <p className="text-slate-500">Law Society ID: 4501</p>
-          </div>
+          <button
+            onClick={() => {
+              document.cookie = "token=; path=/; expires=Thu, 01 Jan 1970 00:00:01 GMT;";
+              window.location.href = "/login";
+            }}
+            className="text-slate-500 hover:text-red-400 transition-colors p-2"
+            title="Log Out"
+          >
+            <i className="fas fa-sign-out-alt"></i>
+          </button>
         </div>
       </div>
     </aside>

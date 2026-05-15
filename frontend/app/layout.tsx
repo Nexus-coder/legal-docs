@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist, Geist_Mono, Inter } from "next/font/google";
 import "./globals.css";
 import Sidebar from "./components/Sidebar";
 
@@ -11,6 +11,12 @@ const geistSans = Geist({
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
+});
+
+const inter = Inter({
+  variable: "--font-inter",
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700", "800", "900"],
 });
 
 export const metadata: Metadata = {
@@ -29,14 +35,9 @@ export default function RootLayout({
         <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet" />
       </head>
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased bg-slate-50 text-slate-800 font-sans`}
+        className={`${geistSans.variable} ${geistMono.variable} ${inter.variable} antialiased bg-slate-50 text-slate-800 font-sans`}
       >
-        <div className="flex h-screen overflow-hidden">
-          <Sidebar />
-          <main className="flex-1 flex flex-col overflow-y-auto">
-            {children}
-          </main>
-        </div>
+        {children}
       </body>
     </html>
   );
