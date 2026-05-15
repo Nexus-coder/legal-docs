@@ -1,21 +1,36 @@
 import Link from "next/link";
+import { cookies } from "next/headers";
 import { API_BASE_URL } from "@/lib/api";
 
-async function getStats() {
-  const res = await fetch(`${API_BASE_URL}stats`, { next: { revalidate: 0 } });
+async function getStats(token: string) {
+  const res = await fetch(`${API_BASE_URL}stats`, {
+    headers: { Authorization: `Bearer ${token}` },
+    next: { revalidate: 0 },
+  });
   if (!res.ok) throw new Error("Failed to fetch stats");
   return res.json();
 }
 
-async function getMatters() {
-  const res = await fetch(`${API_BASE_URL}matters/`, { next: { revalidate: 0 } });
+async function getMatters(token: string) {
+  const res = await fetch(`${API_BASE_URL}matters/`, {
+    headers: { Authorization: `Bearer ${token}` },
+    next: { revalidate: 0 },
+  });
   if (!res.ok) throw new Error("Failed to fetch matters");
   return res.json();
 }
 
 export default async function Dashboard() {
-  const stats = await getStats();
-  const matters = await getMatters();
+  const cookieStore = await cookies();
+  const token = cookieStore.get("token")?.value;
+
+  if (!token) {
+    // Should be handled by middleware, but safety first
+    return <div>Unauthorized</div>;
+  }
+
+  const stats = await getStats(token);
+  const matters = await getMatters(token);
 
   return (
     <section className="p-8">
@@ -90,7 +105,7 @@ export default async function Dashboard() {
             {matters.map((matter: any) => (
               <tr key={matter.id} className="hover:bg-slate-50 transition">
                 <td className="px-6 py-4">
-                  <p className="font-bold">{matter.id}</p>
+                  <p className="font-bold">{matter.case_number}</p>
                   <p className="text-xs text-slate-500">{matter.division}</p>
                 </td>
                 <td className="px-6 py-4">

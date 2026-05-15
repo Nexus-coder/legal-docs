@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from src.config import settings
 from src.database import engine
@@ -52,10 +52,16 @@ app.include_router(
 app.include_router(admin_router.router, prefix="/api/admin", tags=["Admin Console"])
 
 
+from typing import Annotated
+from src.auth.dependencies import get_current_user
+from src.auth.schemas import UserRead
+from src.database import get_db
+from sqlalchemy.ext.asyncio import AsyncSession
+from src.matters import service as matters_service
+
 @app.get("/api/stats")
-def get_dashboard_stats():
-    return {
-        "citations_verified": {"current": 142, "total": 158},
-        "recent_matches": 24,
-        "draft_status": {"drafting": 8, "verified": 3, "exported": 12},
-    }
+async def get_dashboard_stats(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[UserRead, Depends(get_current_user)],
+):
+    return await matters_service.get_user_dashboard_stats(db, user_id=current_user.id)
