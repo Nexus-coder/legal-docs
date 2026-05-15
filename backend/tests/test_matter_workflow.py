@@ -130,6 +130,62 @@ class MatterWorkflowTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(refreshed.verification_total, 1)
             self.assertEqual(len(refreshed.citation_evidence), 1)
 
+    async def test_draft_documents_are_matter_owned_and_upserted(self):
+        async with self.Session() as db:
+            user = await self._create_user(db)
+            matter = await service.create_matter(
+                db,
+                user.id,
+                MatterCreate(case_number="ELC-4", division="ELC"),
+            )
+
+            first = await service.upsert_draft_document(
+                db,
+                matter,
+                document_type="injunction_motion",
+                title="Notice of Motion",
+                content="Initial motion draft.",
+                status="draft",
+                error_status=None,
+                revision_count=1,
+            )
+            await db.commit()
+            await db.refresh(first)
+
+            updated = await service.upsert_draft_document(
+                db,
+                matter,
+                document_type="injunction_motion",
+                title="Notice of Motion",
+                content="Updated motion draft.",
+                status="verified",
+                error_status=None,
+                revision_count=2,
+            )
+            affidavit = await service.upsert_draft_document(
+                db,
+                matter,
+                document_type="supporting_affidavit",
+                title="Supporting Affidavit",
+                content="Affidavit draft.",
+                status="needs_review",
+                error_status="max_revisions_failed",
+                revision_count=3,
+            )
+            await db.commit()
+
+            self.assertEqual(updated.id, first.id)
+            self.assertNotEqual(affidavit.id, first.id)
+
+            refreshed = await service.get_user_matter(
+                db, user.id, matter.id, include_related=True
+            )
+            self.assertEqual(len(refreshed.draft_documents), 2)
+            by_type = {document.document_type: document for document in refreshed.draft_documents}
+            self.assertEqual(by_type["injunction_motion"].content, "Updated motion draft.")
+            self.assertEqual(by_type["injunction_motion"].status, "verified")
+            self.assertEqual(by_type["supporting_affidavit"].error_status, "max_revisions_failed")
+
     def test_drafting_error_statuses_are_safe_and_named(self):
         self.assertEqual(
             _classify_drafting_error(RuntimeError("Pinecone retrieval timeout")),

@@ -41,6 +41,9 @@ class Matter(Base):
     citation_evidence = relationship(
         "CitationEvidence", back_populates="matter", cascade="all, delete-orphan"
     )
+    draft_documents = relationship(
+        "DraftDocument", back_populates="matter", cascade="all, delete-orphan"
+    )
 
 
 class MatterActivity(Base):
@@ -70,3 +73,20 @@ class CitationEvidence(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     matter = relationship("Matter", back_populates="citation_evidence")
+
+
+class DraftDocument(Base):
+    __tablename__ = "draft_document"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    matter_id: Mapped[int] = mapped_column(ForeignKey("matter.id"), index=True, nullable=False)
+    document_type: Mapped[str] = mapped_column(String(80), index=True, nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(50), default="draft")
+    error_status: Mapped[str | None] = mapped_column(String(80))
+    revision_count: Mapped[int] = mapped_column(Integer, default=0)
+    generated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    matter = relationship("Matter", back_populates="draft_documents")

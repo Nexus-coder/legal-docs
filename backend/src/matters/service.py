@@ -5,7 +5,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-from src.matters.models import CitationEvidence, Matter, MatterActivity
+from src.matters.models import CitationEvidence, DraftDocument, Matter, MatterActivity
 from src.matters.schemas import MatterCreate, WORKFLOW_STATES
 
 logger = logging.getLogger(__name__)
@@ -42,7 +42,9 @@ async def get_user_matter(
     stmt = select(Matter).where(Matter.id == matter_id, Matter.user_id == user_id)
     if include_related:
         stmt = stmt.options(
-            selectinload(Matter.activities), selectinload(Matter.citation_evidence)
+            selectinload(Matter.activities),
+            selectinload(Matter.citation_evidence),
+            selectinload(Matter.draft_documents),
         )
     result = await db.execute(stmt)
     matter = result.scalar_one_or_none()
@@ -170,6 +172,49 @@ async def upsert_citation_evidence(
     matter.verification_done = len([e for e in evidence if e.status == "verified"])
     matter.verification_total = len(evidence)
     return evidence
+
+
+async def upsert_draft_document(
+    db: AsyncSession,
+    matter: Matter,
+    *,
+    document_type: str,
+    title: str,
+    content: str,
+    status: str,
+    error_status: str | None,
+    revision_count: int,
+) -> DraftDocument:
+    result = await db.execute(
+        select(DraftDocument).where(
+            DraftDocument.matter_id == matter.id,
+            DraftDocument.document_type == document_type,
+        )
+    )
+    document = result.scalar_one_or_none()
+    now = datetime.now(timezone.utc)
+    if document is None:
+        document = DraftDocument(
+            matter_id=matter.id,
+            document_type=document_type,
+            title=title,
+            content=content,
+            status=status,
+            error_status=error_status,
+            revision_count=revision_count,
+            generated_at=now,
+            updated_at=now,
+        )
+        db.add(document)
+        return document
+
+    document.title = title
+    document.content = content
+    document.status = status
+    document.error_status = error_status
+    document.revision_count = revision_count
+    document.updated_at = now
+    return document
 
 
 async def get_user_dashboard_stats(db: AsyncSession, user_id: int):

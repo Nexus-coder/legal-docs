@@ -1,5 +1,6 @@
 from typing import List
 from src.models import CustomBaseModel
+from src.matters.schemas import DraftDocumentRead
 
 
 class DraftingRequest(CustomBaseModel):
@@ -21,6 +22,7 @@ class DraftingResponse(CustomBaseModel):
     workflow_state: str
     status: str
     error_status: str | None = None
+    documents: List[DraftDocumentRead] = []
     blocks: List[GeneratedBlock]
 
 

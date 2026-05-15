@@ -59,6 +59,21 @@ class CitationEvidenceRead(CustomBaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class DraftDocumentRead(CustomBaseModel):
+    id: int
+    matter_id: int
+    document_type: str
+    title: str
+    content: str
+    status: str
+    error_status: str | None = None
+    revision_count: int = 0
+    generated_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class MatterDetailRead(MatterBase):
     id: int
     user_id: int
@@ -75,6 +90,7 @@ class MatterDetailRead(MatterBase):
     updated_at: datetime
     activities: list[MatterActivityRead] = []
     citation_evidence: list[CitationEvidenceRead] = []
+    draft_documents: list[DraftDocumentRead] = []
 
     model_config = ConfigDict(from_attributes=True)
 

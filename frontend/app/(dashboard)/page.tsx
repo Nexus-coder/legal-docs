@@ -47,66 +47,68 @@ export default async function Dashboard() {
     : 0;
 
   return (
-    <section className="p-8">
-      <div className="flex justify-between items-center mb-8">
-        <div>
-          <h2 className="text-3xl font-bold text-slate-900 tracking-tight">Matter Management</h2>
-          <p className="text-slate-500">Manage your active litigation and pleadings</p>
+    <section className="ld-page">
+      <div className="ld-page-inner">
+        <div className="ld-page-header">
+          <div>
+            <p className="ld-eyebrow">Matter command desk</p>
+            <h2 className="ld-title">Active pleadings, citations, and drafting flow.</h2>
+            <p className="ld-subtitle">A working surface for live matters: start intake, monitor verification, and resume the drafting workspace without losing procedural context.</p>
+          </div>
+          <Link href="/pii-masking" className="ld-primary-action">
+            <i className="fas fa-plus"></i> New drafting matter
+          </Link>
         </div>
-        <Link href="/pii-masking"
-          className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-bold shadow-lg shadow-blue-200 flex items-center transition">
-          <i className="fas fa-plus mr-2"></i> Quick Start Pleading
-        </Link>
-      </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
-          <div className="flex items-center justify-between mb-4">
-            <p className="text-sm font-semibold text-slate-500">Citations Verified</p>
-            <i className="fas fa-check-circle text-green-500"></i>
+        <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <div className="ld-card p-5">
+            <div className="mb-5 flex items-center justify-between">
+              <p className="ld-card-label">Citations verified</p>
+              <span className="status-badge status-green"><i className="fas fa-check-circle"></i> Verified</span>
+            </div>
+            <div className="flex items-end gap-2">
+              <span className="text-4xl font-extrabold text-slate-950">{stats.citations_verified.current}</span>
+              <span className="pb-1 text-sm font-semibold text-slate-500">of {stats.citations_verified.total}</span>
+            </div>
+            <div className="mt-5 h-2 overflow-hidden rounded-full bg-slate-100">
+              <div className="h-full bg-green-500" style={{ width: `${citationProgress}%` }}></div>
+            </div>
           </div>
-          <div className="flex items-end space-x-2">
-            <span className="text-4xl font-bold">{stats.citations_verified.current}</span>
-            <span className="text-slate-400 mb-1">/ {stats.citations_verified.total} Total</span>
+          <div className="ld-card p-5">
+            <div className="mb-5 flex items-center justify-between">
+              <p className="ld-card-label">Recent eKLR matches</p>
+              <span className="flex h-8 w-8 items-center justify-center rounded-md bg-blue-50 text-blue-600">
+                <i className="fas fa-database"></i>
+              </span>
+            </div>
+            <span className="text-4xl font-extrabold text-slate-950">{stats.recent_matches}</span>
+            <p className="mt-3 text-sm font-semibold text-slate-500">New precedents are available for retrieval and citation checks.</p>
           </div>
-          <div className="w-full bg-slate-100 h-2 rounded-full mt-4 overflow-hidden">
-            <div className="bg-green-500 h-full" style={{ width: `${citationProgress}%` }}></div>
+          <div className="ld-card p-5">
+            <div className="mb-5 flex items-center justify-between">
+              <p className="ld-card-label">Draft status</p>
+              <span className="flex h-8 w-8 items-center justify-center rounded-md bg-amber-50 text-amber-600">
+                <i className="fas fa-file-alt"></i>
+              </span>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <div className="ld-card-muted p-3 text-center"><span className="block text-2xl font-extrabold">{stats.draft_status.drafting}</span><span className="ld-card-label">Drafting</span></div>
+              <div className="ld-card-muted p-3 text-center"><span className="block text-2xl font-extrabold text-blue-600">{stats.draft_status.verified}</span><span className="ld-card-label">Verified</span></div>
+              <div className="ld-card-muted p-3 text-center"><span className="block text-2xl font-extrabold text-green-600">{stats.draft_status.exported}</span><span className="ld-card-label">Exported</span></div>
+            </div>
           </div>
         </div>
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
-          <div className="flex items-center justify-between mb-4">
-            <p className="text-sm font-semibold text-slate-500">Recent eKLR Matches</p>
-            <i className="fas fa-database text-blue-500"></i>
-          </div>
-          <span className="text-4xl font-bold">{stats.recent_matches}</span>
-          <p className="text-xs text-slate-400 mt-2">+5 new precedents since yesterday</p>
-        </div>
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
-          <div className="flex items-center justify-between mb-4">
-            <p className="text-sm font-semibold text-slate-500">Draft Status</p>
-            <i className="fas fa-file-alt text-amber-500"></i>
-          </div>
-          <div className="flex space-x-4">
-            <div className="text-center"><span className="block text-xl font-bold">{stats.draft_status.drafting}</span><span
-              className="text-[10px] text-slate-400 uppercase">Drafting</span></div>
-            <div className="text-center"><span className="block text-xl font-bold text-blue-600">{stats.draft_status.verified}</span><span
-              className="text-[10px] text-slate-400 uppercase">Verified</span></div>
-            <div className="text-center"><span className="block text-xl font-bold text-green-600">{stats.draft_status.exported}</span><span
-              className="text-[10px] text-slate-400 uppercase">Exported</span></div>
-          </div>
-        </div>
-      </div>
 
-      <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
-        <div className="p-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
-          <h3 className="font-bold text-slate-700 uppercase text-xs tracking-wider">Active Matters</h3>
-          <div className="flex space-x-2">
-            <input type="text" placeholder="Search Case ID..."
-              className="text-xs px-3 py-1 border rounded-md" />
+        <div className="ld-table-shell">
+          <div className="flex items-center justify-between border-b border-slate-200 bg-white px-5 py-4">
+            <div>
+              <p className="ld-card-label">Active matters</p>
+              <p className="mt-1 text-sm text-slate-500">Resume a pleading packet or inspect verification progress.</p>
+            </div>
+            <input type="text" placeholder="Search case ID" className="w-44 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs outline-none focus:border-blue-500" />
           </div>
-        </div>
-        <table className="w-full text-left">
-          <thead className="text-xs uppercase text-slate-400 border-b">
+          <table>
+          <thead>
             <tr>
               <th className="px-6 py-4">Case ID & Division</th>
               <th className="px-6 py-4">Status</th>
@@ -121,13 +123,13 @@ export default async function Dashboard() {
                 const matterTotal = matter.verification_total || 0;
                 const matterProgress = matterTotal ? (matter.verification_done / matterTotal) * 100 : 0;
                 return (
-              <tr key={matter.id} className="hover:bg-slate-50 transition">
+              <tr key={matter.id} className="transition hover:bg-slate-50">
                 <td className="px-6 py-4">
-                  <p className="font-bold">{matter.case_number}</p>
+                  <p className="font-bold text-slate-950">{matter.case_number}</p>
                   <p className="text-xs text-slate-500">{matter.division}</p>
                 </td>
                 <td className="px-6 py-4">
-                  <span className={`px-2 py-1 ${matter.workflow_state === 'draft_generated' ? 'bg-blue-100 text-blue-700' : matter.workflow_state === 'citations_verified' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'} text-[10px] font-bold rounded uppercase tracking-wide`}>
+                  <span className={`status-badge ${matter.workflow_state === 'draft_generated' ? 'status-blue' : matter.workflow_state === 'citations_verified' ? 'status-green' : 'status-amber'}`}>
                     {matter.workflow_state.replaceAll("_", " ")}
                   </span>
                 </td>
@@ -139,7 +141,7 @@ export default async function Dashboard() {
                 </td>
                 <td className="px-6 py-4 text-sm text-slate-500">{matter.last_activity}</td>
                 <td className="px-6 py-4 text-right">
-                  <Link href={`/drafting?matter_id=${matter.id}`} className="text-blue-600 hover:text-blue-800 font-semibold text-sm">
+                  <Link href={`/drafting?matter_id=${matter.id}`} className="text-sm font-extrabold text-blue-600 hover:text-blue-800">
                     Resume <i className="fas fa-chevron-right ml-1"></i>
                   </Link>
                 </td>
@@ -149,6 +151,7 @@ export default async function Dashboard() {
             ))}
           </tbody>
         </table>
+        </div>
       </div>
     </section>
   );
