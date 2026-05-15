@@ -1,10 +1,7 @@
-import Sidebar from "../components/Sidebar";
+import type React from "react";
+import Sidebar from "./Sidebar";
 
-export default function DashboardLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function WorkspaceShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex h-screen overflow-hidden bg-slate-100">
       <Sidebar />
