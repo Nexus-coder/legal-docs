@@ -1,14 +1,14 @@
 import { API_BASE_URL } from "@/lib/api";
 
-async function getDraft() {
+async function getDraft(jurisdiction: string, subcategory: string, instructions: string) {
   try {
     const res = await fetch(`${API_BASE_URL}drafting/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        jurisdiction: "Environment & Land Court",
-        subcategory: "Adverse Possession",
-        instructions: "Draft grounds for adverse possession claim."
+        jurisdiction: jurisdiction || "Environment & Land Court",
+        subcategory: subcategory || "Adverse Possession",
+        instructions: instructions || "Draft grounds for adverse possession claim."
       }),
       next: { revalidate: 0 }
     });
@@ -29,15 +29,24 @@ async function getCitations() {
   }
 }
 
-export default async function DraftingWorkspace() {
+interface PageProps {
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+}
+
+export default async function DraftingWorkspace({ searchParams }: PageProps) {
+  const params = await searchParams;
+  const jurisdiction = (params.jurisdiction as string) || "";
+  const subcategory = (params.subcategory as string) || "";
+  const instructions = (params.instructions as string) || "";
+
   const [draftData, citation] = await Promise.all([
-    getDraft(),
+    getDraft(jurisdiction, subcategory, instructions),
     getCitations()
   ]);
 
   const block = draftData?.blocks?.[0] || {
-    title: "GROUND 1: ADVERSE POSSESSION",
-    content: "The Plaintiff has been in open, notorious, and continuous possession of [LAND_ID_1] for a period exceeding 12 years without the consent of the Registered Owner, meeting the threshold under Section 7 of the Limitation of Actions Act.",
+    title: `GROUND 1: ${subcategory.toUpperCase() || "PLEADING"}`,
+    content: "The Plaintiff has been in open, notorious, and continuous possession of the subject property...",
   };
 
   return (
