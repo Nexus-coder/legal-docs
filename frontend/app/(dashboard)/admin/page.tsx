@@ -26,7 +26,7 @@ export default function AdminScreen() {
             <tbody className="divide-y divide-slate-100">
               <tr className="hover:bg-red-50/30">
                 <td className="px-6 py-4 font-mono text-xs">#ELC-45-G3</td>
-                <td className="px-6 py-4">Cited "Sec 22 of Land Act" for Adverse Possession</td>
+                <td className="px-6 py-4">Cited &quot;Sec 22 of Land Act&quot; for Adverse Possession</td>
                 <td className="px-6 py-4">
                   <span className="px-2 py-0.5 bg-red-100 text-red-600 rounded-full text-xs">No Match Found</span>
                 </td>

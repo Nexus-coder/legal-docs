@@ -1,11 +1,11 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { Suspense, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { API_BASE_URL } from "@/lib/api";
 
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const signupSuccess = searchParams.get("signup") === "success";
@@ -41,8 +41,8 @@ export default function LoginPage() {
       const data = await res.json();
       document.cookie = `token=${data.access_token}; path=/; max-age=86400; SameSite=Lax`;
       router.push("/");
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Login failed");
     } finally {
       setLoading(false);
     }
@@ -170,7 +170,7 @@ export default function LoginPage() {
 
       {/* Sign-up prompt */}
       <p className="text-center text-slate-500 font-medium" style={{ fontSize: "0.9rem" }}>
-        Don't have an account?{" "}
+        Don&apos;t have an account?{" "}
         <Link href="/signup" className="text-blue-600 font-bold hover:underline underline-offset-2">
           Sign up
         </Link>
@@ -181,5 +181,13 @@ export default function LoginPage() {
         © 2024 LegalDocs · All rights reserved
       </p>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<div className="text-slate-500">Loading...</div>}>
+      <LoginForm />
+    </Suspense>
   );
 }

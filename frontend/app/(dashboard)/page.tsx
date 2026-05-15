@@ -2,6 +2,16 @@ import Link from "next/link";
 import { cookies } from "next/headers";
 import { API_BASE_URL } from "@/lib/api";
 
+type MatterRow = {
+  id: number;
+  case_number: string;
+  division: string;
+  workflow_state: string;
+  verification_done: number;
+  verification_total: number;
+  last_activity?: string;
+};
+
 async function getStats(token: string) {
   const res = await fetch(`${API_BASE_URL}stats`, {
     headers: { Authorization: `Bearer ${token}` },
@@ -31,6 +41,10 @@ export default async function Dashboard() {
 
   const stats = await getStats(token);
   const matters = await getMatters(token);
+  const citationTotal = stats.citations_verified.total || 0;
+  const citationProgress = citationTotal
+    ? (stats.citations_verified.current / citationTotal) * 100
+    : 0;
 
   return (
     <section className="p-8">
@@ -56,7 +70,7 @@ export default async function Dashboard() {
             <span className="text-slate-400 mb-1">/ {stats.citations_verified.total} Total</span>
           </div>
           <div className="w-full bg-slate-100 h-2 rounded-full mt-4 overflow-hidden">
-            <div className="bg-green-500 h-full" style={{ width: `${(stats.citations_verified.current / stats.citations_verified.total) * 100}%` }}></div>
+            <div className="bg-green-500 h-full" style={{ width: `${citationProgress}%` }}></div>
           </div>
         </div>
         <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
@@ -102,30 +116,36 @@ export default async function Dashboard() {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {matters.map((matter: any) => (
+            {matters.map((matter: MatterRow) => (
+              (() => {
+                const matterTotal = matter.verification_total || 0;
+                const matterProgress = matterTotal ? (matter.verification_done / matterTotal) * 100 : 0;
+                return (
               <tr key={matter.id} className="hover:bg-slate-50 transition">
                 <td className="px-6 py-4">
                   <p className="font-bold">{matter.case_number}</p>
                   <p className="text-xs text-slate-500">{matter.division}</p>
                 </td>
                 <td className="px-6 py-4">
-                  <span className={`px-2 py-1 ${matter.status === 'Drafting' ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-700'} text-[10px] font-bold rounded uppercase tracking-wide`}>
-                    {matter.status}
+                  <span className={`px-2 py-1 ${matter.workflow_state === 'draft_generated' ? 'bg-blue-100 text-blue-700' : matter.workflow_state === 'citations_verified' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'} text-[10px] font-bold rounded uppercase tracking-wide`}>
+                    {matter.workflow_state.replaceAll("_", " ")}
                   </span>
                 </td>
                 <td className="px-6 py-4">
                   <div className="text-xs text-slate-500">{matter.verification_done} / {matter.verification_total} Verified</div>
                   <div className="w-24 h-1.5 bg-slate-100 rounded-full mt-1 overflow-hidden">
-                    <div className="bg-amber-400 h-full" style={{ width: `${(matter.verification_done / matter.verification_total) * 100}%` }}></div>
+                    <div className="bg-amber-400 h-full" style={{ width: `${matterProgress}%` }}></div>
                   </div>
                 </td>
                 <td className="px-6 py-4 text-sm text-slate-500">{matter.last_activity}</td>
                 <td className="px-6 py-4 text-right">
-                  <Link href="/drafting" className="text-blue-600 hover:text-blue-800 font-semibold text-sm">
+                  <Link href={`/drafting?matter_id=${matter.id}`} className="text-blue-600 hover:text-blue-800 font-semibold text-sm">
                     Resume <i className="fas fa-chevron-right ml-1"></i>
                   </Link>
                 </td>
               </tr>
+                );
+              })()
             ))}
           </tbody>
         </table>

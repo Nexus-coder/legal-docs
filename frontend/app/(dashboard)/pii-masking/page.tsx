@@ -4,6 +4,14 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { API_BASE_URL } from "@/lib/api";
 
+type PiiEntity = {
+  entity_type: string;
+  text: string;
+  start: number;
+  end: number;
+  score: number;
+};
+
 export default function PIIMasking() {
   const router = useRouter();
   const [step, setStep] = useState(1);
@@ -12,46 +20,80 @@ export default function PIIMasking() {
   
   const [facts, setFacts] = useState("");
   const [anonymizedFacts, setAnonymizedFacts] = useState("");
-  const [detectedEntities, setDetectedEntities] = useState<any[]>([]);
+  const [detectedEntities, setDetectedEntities] = useState<PiiEntity[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [matterId, setMatterId] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const getToken = () =>
+    document.cookie
+      .split("; ")
+      .find((row) => row.startsWith("token="))
+      ?.split("=")[1];
 
   const handleAnalyze = async () => {
     if (!facts.trim()) return;
     setIsAnalyzing(true);
+    setError(null);
     try {
-      const res = await fetch(`${API_BASE_URL}pii/detect`, {
+      const token = getToken();
+      if (!token) throw new Error("Authentication required");
+
+      let activeMatterId = matterId;
+      if (!activeMatterId) {
+        const matterRes = await fetch(`${API_BASE_URL}matters/`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            case_number: `MAT-${new Date().toISOString().slice(0, 10)}-${Date.now().toString().slice(-5)}`,
+            division: jurisdiction,
+            jurisdiction,
+            subcategory,
+            last_activity: "Matter created",
+          }),
+        });
+        if (!matterRes.ok) throw new Error("Could not create matter");
+        const matter = await matterRes.json();
+        activeMatterId = matter.id;
+        setMatterId(matter.id);
+      }
+
+      const res = await fetch(`${API_BASE_URL}pii/mask`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: facts })
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          matter_id: activeMatterId,
+          text: facts,
+          jurisdiction,
+          subcategory,
+        })
       });
       if (res.ok) {
         const data = await res.json();
         setDetectedEntities(data.entities);
-        
-        // Simple client-side masking for preview
-        let masked = facts;
-        // Sort entities by start index descending to avoid offset issues
-        const sorted = [...data.entities].sort((a, b) => b.start - a.start);
-        sorted.forEach(ent => {
-          const placeholder = `[${ent.entity_type.toUpperCase()}]`;
-          masked = masked.substring(0, ent.start) + placeholder + masked.substring(ent.end);
-        });
-        setAnonymizedFacts(masked);
+        setAnonymizedFacts(data.masked_text);
         setStep(3); // Move to review step
+      } else {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || "PII masking failed");
       }
     } catch (error) {
       console.error("Analysis failed", error);
+      setError(error instanceof Error ? error.message : "Analysis failed");
     } finally {
       setIsAnalyzing(false);
     }
   };
 
   const handleLaunch = () => {
-    const params = new URLSearchParams({
-      jurisdiction,
-      subcategory,
-      instructions: anonymizedFacts || facts
-    });
+    if (!matterId) return;
+    const params = new URLSearchParams({ matter_id: String(matterId) });
     router.push(`/drafting?${params.toString()}`);
   };
 
@@ -62,6 +104,11 @@ export default function PIIMasking() {
           <h2 className="text-3xl font-bold text-slate-900">Context & Privacy Setup</h2>
           <p className="text-slate-500 mt-2">Ground your case in law and mask sensitive data before AI processing.</p>
         </div>
+        {error && (
+          <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
+            {error}
+          </div>
+        )}
 
         <div className="bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden">
           {/* Progress Header */}

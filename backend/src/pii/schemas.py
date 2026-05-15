@@ -23,10 +23,16 @@ class DetectResponse(CustomBaseModel):
 # ── Masking ──────────────────────────────────────────────────────
 
 class MaskRequest(CustomBaseModel):
+    matter_id: int
     text: str
+    jurisdiction: str | None = None
+    subcategory: str | None = None
 
 
 class MaskResponse(CustomBaseModel):
+    matter_id: int
+    workflow_state: str
     masked_text: str
     entities: list[PiiEntity]
     entity_count: int
+    status: str = "pii_masked"

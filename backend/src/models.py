@@ -1,5 +1,5 @@
 from datetime import datetime
-from zoneinfo import ZoneInfo
+from datetime import timezone
 from pydantic import BaseModel, ConfigDict, field_serializer
 from sqlalchemy import MetaData
 from sqlalchemy.orm import DeclarativeBase
@@ -12,7 +12,7 @@ class CustomBaseModel(BaseModel):
     def _serialize_datetimes(self, value):
         if isinstance(value, datetime):
             if value.tzinfo is None:
-                value = value.replace(tzinfo=ZoneInfo("UTC"))
+                value = value.replace(tzinfo=timezone.utc)
             return value.strftime("%Y-%m-%dT%H:%M:%S%z")
         return value
 

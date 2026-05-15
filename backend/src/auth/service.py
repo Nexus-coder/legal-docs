@@ -1,6 +1,5 @@
 from datetime import datetime, timedelta, timezone
 import jwt
-from passlib.context import CryptContext
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,6 +8,7 @@ from src.auth.models import User
 from src.auth.schemas import UserCreate
 
 import bcrypt
+
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return bcrypt.checkpw(

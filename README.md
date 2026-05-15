@@ -111,12 +111,18 @@ Open [http://localhost:3000](http://localhost:3000) to view the dashboard.
 
 Interactive docs are available at [http://localhost:8000/docs](http://localhost:8000/docs) in `local` and `staging` environments.
 
+### Matter-Centered Workflow
+
+LegalDocs treats a `Matter` as the workflow spine. The dashboard creates or resumes matters, `/api/pii/mask` saves raw facts and masked facts against the selected matter, and `/api/drafting/generate` drafts from server-side masked facts. The browser passes `matter_id` between screens instead of sending case facts through query parameters.
+
+Workflow states are validated server-side in this order: `created` -> `facts_entered` -> `pii_masked` -> `draft_generated` -> `citations_verified` -> `export_ready`. Invalid jumps and stale expected states return safe HTTP errors. Major events are recorded in the matter activity timeline, and citation evidence snippets are stored for the drafting workspace drawer.
+
 | Prefix | Domain | Key Endpoints |
 |--------|--------|---------------|
 | `/api/auth` | Authentication | `POST /signup` · `POST /login` · `GET /me` |
-| `/api/matters` | Matter Management | CRUD for legal cases and statuses |
-| `/api/pii` | PII Masking | `POST /detect` · `POST /mask` |
-| `/api/drafting` | Drafting Workspace | AI-assisted pleading drafting |
+| `/api/matters` | Matter Management | `GET /` · `POST /` · `GET /{matter_id}` · `POST /{matter_id}/transition` · `POST /{matter_id}/verify-citations` |
+| `/api/pii` | PII Masking | Authenticated `POST /detect` · matter-scoped `POST /mask` |
+| `/api/drafting` | Drafting Workspace | Matter-scoped `POST /generate` · safe named drafting statuses |
 | `/api/admin` | Admin Console | System administration |
 | `/api/stats` | Dashboard | Aggregated stats for the frontend |
 

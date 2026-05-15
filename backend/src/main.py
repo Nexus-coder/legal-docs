@@ -1,15 +1,21 @@
 from contextlib import asynccontextmanager
+from typing import Annotated
+
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from src.config import settings
-from src.database import engine
-from src.models import Base
-from src.auth import router as auth_router
-from src.auth.models import User  # Registered with Base
-from src.matters import router as matters_router
-from src.pii import router as pii_router
-from src.drafting import router as drafting_router
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from src.admin import router as admin_router
+from src.auth import router as auth_router
+from src.auth.dependencies import get_current_user
+from src.auth.schemas import UserRead
+from src.config import settings
+from src.database import engine, get_db
+from src.drafting import router as drafting_router
+from src.matters import router as matters_router
+from src.matters import service as matters_service
+from src.models import Base
+from src.pii import router as pii_router
 
 
 @asynccontextmanager
@@ -18,7 +24,43 @@ async def lifespan(app: FastAPI):
     if settings.ENVIRONMENT == "local":
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+            if "sqlite" in settings.DATABASE_URL:
+                await conn.run_sync(_backfill_matter_workflow_columns)
     yield
+
+
+def _backfill_matter_workflow_columns(sync_conn):
+    columns = {
+        row[1] for row in sync_conn.exec_driver_sql("PRAGMA table_info(matter)").fetchall()
+    }
+    additions = {
+        "workflow_state": "VARCHAR(50) DEFAULT 'created'",
+        "jurisdiction": "VARCHAR(150)",
+        "subcategory": "VARCHAR(150)",
+        "raw_facts": "TEXT",
+        "masked_facts": "TEXT",
+        "pii_entity_count": "INTEGER DEFAULT 0",
+        "draft_content": "TEXT",
+        "drafting_error": "VARCHAR(80)",
+        "masked_at": "DATETIME",
+        "drafted_at": "DATETIME",
+        "citations_verified_at": "DATETIME",
+        "export_ready_at": "DATETIME",
+    }
+    for name, ddl in additions.items():
+        if name not in columns:
+            sync_conn.exec_driver_sql(f"ALTER TABLE matter ADD COLUMN {name} {ddl}")
+    sync_conn.exec_driver_sql(
+        """
+        UPDATE matter
+        SET workflow_state = CASE
+            WHEN status = 'Verified' THEN 'citations_verified'
+            WHEN status = 'Exported' THEN 'export_ready'
+            ELSE COALESCE(workflow_state, 'created')
+        END
+        WHERE workflow_state IS NULL OR workflow_state = ''
+        """
+    )
 
 
 app_kwargs = {
@@ -50,14 +92,6 @@ app.include_router(
     drafting_router.router, prefix="/api/drafting", tags=["Drafting Workspace"]
 )
 app.include_router(admin_router.router, prefix="/api/admin", tags=["Admin Console"])
-
-
-from typing import Annotated
-from src.auth.dependencies import get_current_user
-from src.auth.schemas import UserRead
-from src.database import get_db
-from sqlalchemy.ext.asyncio import AsyncSession
-from src.matters import service as matters_service
 
 @app.get("/api/stats")
 async def get_dashboard_stats(

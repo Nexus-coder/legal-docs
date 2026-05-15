@@ -70,3 +70,10 @@ The resulting endpoint at `POST /api/drafting/generate` inside `backend/app/api/
 ```
 
 The React asynchronous architecture on the frontend hits this `generate_draft` endpoint successfully returning mapping dynamic responses—wherever they are legally verified or strictly drafted—bridging cutting-edge Agentic LLM logic reliably back to standard human user dashboards natively.
+## 6. Matter-Centered Workflow Governance
+
+The active drafting endpoint is `POST /api/drafting/generate` in `backend/src/drafting/router.py`. It is matter-scoped: the backend loads the authenticated user's selected matter, reads stored `masked_facts`, and invokes the LangGraph pipeline from server-side workflow data. Raw facts are no longer passed through the drafting URL.
+
+The `Matter` model owns explicit workflow states: `created`, `facts_entered`, `pii_masked`, `draft_generated`, `citations_verified`, and `export_ready`. Backend transition validation rejects invalid jumps and stale clients. Major workflow events write no-PII activity entries, and citation evidence records store source metadata, confidence, status, and a bounded snippet for the frontend evidence drawer.
+
+Drafting failures return named safe statuses (`retrieval_failed`, `model_failed`, `empty_context`, `malformed_output`, `max_revisions_failed`) rather than raw exception text.

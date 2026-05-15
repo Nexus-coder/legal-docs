@@ -78,6 +78,7 @@ uvicorn src.main:app --reload --port 8000
 ```
 
 > **Auto-init**: When `ENVIRONMENT=local`, the server creates all SQLite tables and the `legal_docs.db` file on startup automatically.
+> Local SQLite startup also backfills the matter workflow columns added for `workflow_state`, masked facts, draft content, verification timestamps, activity timeline, and citation evidence support.
 
 ---
 
@@ -97,8 +98,8 @@ Interactive Swagger docs: [http://localhost:8000/docs](http://localhost:8000/doc
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/detect` | Detect PII entities (returns spans + scores) |
-| `POST` | `/mask` | Detect PII and replace with `[ENTITY_TYPE]` placeholders |
+| `POST` | `/detect` | Detect PII entities for an authenticated user (returns spans + scores) |
+| `POST` | `/mask` | Matter-scoped PII masking; persists raw facts, masked facts, metadata, and workflow state |
 
 **Example — detect:**
 ```bash
@@ -122,10 +123,14 @@ curl -X POST http://localhost:8000/api/pii/detect \
 
 | Prefix | Domain | Description |
 |--------|--------|-------------|
-| `/api/matters` | Matters | Legal case CRUD and status tracking |
-| `/api/drafting` | Drafting | AI-assisted pleading drafting workspace |
+| `/api/matters` | Matters | Legal case CRUD, ownership checks, state transitions, activity timeline, citation verification |
+| `/api/drafting` | Drafting | Matter-scoped AI drafting from stored masked facts with safe error statuses |
 | `/api/admin` | Admin | System administration |
 | `/api/stats` | Dashboard | Aggregated statistics |
+
+### Matter Workflow States
+
+Matter transitions are restricted to `created` -> `facts_entered` -> `pii_masked` -> `draft_generated` -> `citations_verified` -> `export_ready`. The service rejects invalid jumps, duplicate transitions are idempotent, and callers may pass an expected state to detect stale clients. Drafting and PII routes require JWT auth and verify that the selected matter belongs to the current user.
 
 ---
 
