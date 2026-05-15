@@ -1,5 +1,7 @@
 import Link from "next/link";
 import type React from "react";
+import { Button } from "@/app/components/ui/Button";
+import { Input } from "@/app/components/ui/Input";
 
 type AuthHeaderProps = {
   title: string;
@@ -39,7 +41,7 @@ type AuthFormProps = {
 
 export function AuthFormFrame({ children }: { children: React.ReactNode }) {
   return (
-    <div style={{ fontFamily: "var(--font-inter), system-ui, sans-serif" }}>
+    <div className="font-sans antialiased">
       {children}
     </div>
   );
@@ -48,16 +50,13 @@ export function AuthFormFrame({ children }: { children: React.ReactNode }) {
 export function AuthHeader({ title, subtitle }: AuthHeaderProps) {
   return (
     <div className="mb-10">
-      <p className="font-bold uppercase tracking-widest text-blue-600 mb-3" style={{ fontSize: "0.7rem" }}>
+      <p className="text-[0.7rem] font-bold uppercase tracking-widest text-brand-blue mb-3">
         LegalDocs
       </p>
-      <h2
-        className="font-black text-slate-900 leading-tight tracking-tight mb-2"
-        style={{ fontSize: "clamp(1.9rem, 3vw, 2.4rem)" }}
-      >
+      <h2 className="text-4xl lg:text-5xl font-black text-slate-900 leading-tight tracking-tight mb-2">
         {title}
       </h2>
-      <p className="text-slate-500 font-medium" style={{ fontSize: "1rem" }}>
+      <p className="text-base text-slate-500 font-medium">
         {subtitle}
       </p>
     </div>
@@ -65,13 +64,13 @@ export function AuthHeader({ title, subtitle }: AuthHeaderProps) {
 }
 
 export function AuthAlert({ tone, children }: AuthAlertProps) {
-  const styles =
-    tone === "success"
-      ? { background: "#f0fdf4", border: "1.5px solid #bbf7d0", color: "#16a34a" }
-      : { background: "#fef2f2", border: "1.5px solid #fecaca", color: "#dc2626" };
+  const toneStyles = {
+    success: "bg-success-bg border-success-border text-success",
+    error: "bg-error-bg border-error-border text-error",
+  };
 
   return (
-    <div className="mb-6 px-4 py-3.5 rounded-xl flex items-start gap-3 text-sm font-medium" style={styles}>
+    <div className={`mb-6 px-4 py-3.5 rounded-xl border-1.5 flex items-start gap-3 text-sm font-medium ${toneStyles[tone]}`}>
       <svg className="h-5 w-5 flex-shrink-0 mt-px" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
         {tone === "success" ? (
           <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -94,29 +93,16 @@ export function AuthTextField({
   extra,
 }: AuthTextFieldProps) {
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-center justify-between">
-        <label
-          htmlFor={name}
-          className="font-bold uppercase tracking-widest text-slate-400"
-          style={{ fontSize: "0.675rem", letterSpacing: "0.13em" }}
-        >
-          {label}
-        </label>
-        {extra}
-      </div>
-      <input
-        id={name}
-        name={name}
-        type={type}
-        placeholder={placeholder}
-        required={required}
-        autoComplete={type === "password" ? "current-password" : type === "email" ? "email" : "off"}
-        onChange={onChange}
-        className="auth-input w-full px-4 py-3.5 rounded-xl border text-slate-900 placeholder-slate-400 outline-none text-[0.9375rem]"
-        style={{ background: "#f1f5fb", border: "1.5px solid #e2e8f0", fontFamily: "inherit" }}
-      />
-    </div>
+    <Input
+      label={label}
+      name={name}
+      type={type}
+      placeholder={placeholder}
+      required={required}
+      onChange={onChange}
+      extra={extra}
+      autoComplete={type === "password" ? "current-password" : type === "email" ? "email" : "off"}
+    />
   );
 }
 
@@ -129,15 +115,14 @@ export function AuthForm({ onSubmit, children }: AuthFormProps) {
 }
 
 export function AuthFieldGrid({ children }: { children: React.ReactNode }) {
-  return <div className="grid grid-cols-2 gap-4">{children}</div>;
+  return <div className="grid grid-cols-1 md:grid-cols-2 gap-4">{children}</div>;
 }
 
 export function AuthInlineLink({ href, children }: { href: string; children: React.ReactNode }) {
   return (
     <Link
       href={href}
-      className="font-bold uppercase tracking-widest text-blue-600 hover:underline underline-offset-2"
-      style={{ fontSize: "0.675rem" }}
+      className="text-[0.675rem] font-bold uppercase tracking-widest text-brand-blue hover:underline underline-offset-2"
     >
       {children}
     </Link>
@@ -146,32 +131,32 @@ export function AuthInlineLink({ href, children }: { href: string; children: Rea
 
 export function AuthSubmitButton({ loading, children }: AuthSubmitButtonProps) {
   return (
-    <button
+    <Button
       type="submit"
-      disabled={loading}
-      className="auth-btn mt-1 w-full text-white font-extrabold rounded-xl py-4 flex items-center justify-center gap-2 disabled:opacity-50"
-      style={{ fontSize: "0.8125rem", letterSpacing: "0.1em" }}
+      loading={loading}
+      size="lg"
+      className="mt-1 w-full text-[0.8125rem] tracking-[0.1em] uppercase font-extrabold"
     >
-      {loading ? <div className="w-5 h-5 border-2 border-white/40 border-t-white rounded-full animate-spin" /> : children}
-    </button>
+      {children}
+    </Button>
   );
 }
 
 export function AuthDivider() {
   return (
     <div className="flex items-center gap-4 my-8">
-      <div className="flex-1 h-px" style={{ background: "#e8eef7" }} />
+      <div className="flex-1 h-px bg-[#e8eef7]" />
       <span className="font-semibold text-slate-400 text-xs">or</span>
-      <div className="flex-1 h-px" style={{ background: "#e8eef7" }} />
+      <div className="flex-1 h-px bg-[#e8eef7]" />
     </div>
   );
 }
 
 export function AuthFooterLink({ text, href, linkText }: AuthFooterLinkProps) {
   return (
-    <p className="text-center mt-8 text-slate-500 font-medium" style={{ fontSize: "0.9rem" }}>
+    <p className="text-center mt-8 text-sm text-slate-500 font-medium">
       {text}{" "}
-      <Link href={href} className="text-blue-600 font-bold hover:underline underline-offset-2">
+      <Link href={href} className="text-brand-blue font-bold hover:underline underline-offset-2">
         {linkText}
       </Link>
     </p>
@@ -180,8 +165,8 @@ export function AuthFooterLink({ text, href, linkText }: AuthFooterLinkProps) {
 
 export function AuthCopyright() {
   return (
-    <p className="text-center mt-14 font-bold uppercase tracking-widest" style={{ fontSize: "0.6rem", color: "#c9d4e8" }}>
-      &copy; 2024 LegalDocs &middot; All rights reserved
+    <p className="text-center mt-14 font-bold uppercase tracking-widest text-[0.6rem] text-[#c9d4e8]">
+      &copy; {new Date().getFullYear()} LegalDocs &middot; All rights reserved
     </p>
   );
 }
