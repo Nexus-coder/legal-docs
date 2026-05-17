@@ -51,8 +51,13 @@ class CitationEvidenceRead(CustomBaseModel):
     citation_type: str
     title: str
     source: str | None = None
+    source_url: str | None = None
+    neutral_citation: str | None = None
+    court: str | None = None
+    judgment_date: str | None = None
     snippet: str
     confidence: float
+    confidence_breakdown: str | None = None
     status: str
     created_at: datetime
 

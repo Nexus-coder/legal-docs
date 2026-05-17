@@ -1,6 +1,7 @@
 import unittest
 
 from fastapi import HTTPException
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from src.auth.models import User
@@ -8,6 +9,25 @@ from src.models import Base
 from src.matters.schemas import MatterCreate, MatterRead
 from src.matters import service
 from src.drafting.router import _classify_drafting_error, _drafting_status_from_state
+from src.ingestion.indexer import PineconeDimensionMismatch, validate_pinecone_index_dimension
+from src.kenyalaw.fetcher import FetchResult
+from src.kenyalaw.filtering import is_elc_relevant
+from src.kenyalaw.models import CaseDocument, IngestionEvent
+from src.kenyalaw.parser import parse_case_html
+from src.kenyalaw.schemas import IngestionRunCreate
+from src.kenyalaw import service as kenyalaw_service
+from src.kenyalaw import verifier as kenyalaw_verifier
+
+
+class FakeKenyaLawFetcher:
+    def __init__(self, pages):
+        self.pages = pages
+
+    def fetch_text(self, url):
+        for key, content in self.pages.items():
+            if key in url:
+                return FetchResult(url=url, content=content, content_type="text/html")
+        raise AssertionError(f"Unexpected fetch URL: {url}")
 
 
 class MatterWorkflowTests(unittest.IsolatedAsyncioTestCase):
@@ -215,6 +235,245 @@ class MatterWorkflowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(status, "max_revisions_failed")
         self.assertEqual(error, "max_revisions_failed")
+
+    def test_elc_filter_accepts_land_matters_and_rejects_criminal_noise(self):
+        self.assertTrue(
+            is_elc_relevant(
+                title="Mwangi v Kamau (Environment and Land Case E001 of 2024)",
+                court="Environment and Land Court at Nairobi",
+                text="temporary injunction over land parcel",
+            )
+        )
+        self.assertFalse(
+            is_elc_relevant(
+                title="Republic v Otieno",
+                court="High Court",
+                text="criminal murder charge",
+            )
+        )
+
+    def test_kenyalaw_parser_extracts_core_case_metadata(self):
+        html = """
+        <html><head><title>Mwangi v Kamau [2024] KEELC 10 (KLR)</title></head>
+        <body>
+          <p>Court: Environment and Land Court at Nairobi</p>
+          <p>5 February 2024</p>
+          <p>The application seeks a temporary injunction over land parcel LR 1.</p>
+        </body></html>
+        """
+        parsed = parse_case_html(html, "https://new.kenyalaw.org/akn/ke/judgment/keelc/2024/10")
+        self.assertEqual(parsed.title, "Mwangi v Kamau [2024] KEELC 10 (KLR)")
+        self.assertEqual(parsed.neutral_citation, "[2024] KEELC 10")
+        self.assertEqual(parsed.court, "Environment and Land Court at Nairobi")
+        self.assertIn("temporary injunction", parsed.topic_tags)
+
+    def test_pinecone_preflight_detects_dimension_mismatch(self):
+        result = validate_pinecone_index_dimension(
+            index_dimension_provider=lambda: 1536,
+        )
+        self.assertEqual(result.embedding_dimension, 1536)
+        self.assertEqual(result.index_dimension, 1536)
+
+        with self.assertRaises(PineconeDimensionMismatch) as mismatch:
+            validate_pinecone_index_dimension(
+                index_dimension_provider=lambda: 3072,
+            )
+        self.assertEqual(
+            str(mismatch.exception),
+            "Pinecone index dimension 3072 does not match embedding dimension 1536",
+        )
+
+    async def test_dry_run_elc_ingestion_discovers_filters_and_counts(self):
+        listing = """
+        <html><body>
+          <a href="/akn/ke/judgment/keelc/2024/10/">ELC case</a>
+        </body></html>
+        """
+        case = """
+        <html><head><title>Mwangi v Kamau [2024] KEELC 10 (KLR)</title></head>
+        <body>
+          <p>Court: Environment and Land Court at Nairobi</p>
+          <p>The plaintiff seeks an injunction over land parcel LR 1.</p>
+        </body></html>
+        """
+        fetcher = FakeKenyaLawFetcher({"KEELC": listing, "2024/10": case})
+        async with self.Session() as db:
+            run = await kenyalaw_service.start_ingestion_run(
+                db,
+                IngestionRunCreate(dry_run=True, max_pages=1, max_documents=5),
+                fetcher=fetcher,
+            )
+            self.assertEqual(run.status, "completed")
+            self.assertEqual(run.discovered_count, 1)
+            self.assertEqual(run.indexed_count, 1)
+
+            documents = await db.execute(select(CaseDocument))
+            self.assertEqual(len(documents.scalars().all()), 0)
+
+    async def test_preflight_failure_records_readable_event(self):
+        def failing_preflight():
+            raise PineconeDimensionMismatch(
+                index_name="legal-docs",
+                embedding_model="text-embedding-3-small",
+                embedding_dimension=1536,
+                index_dimension=3072,
+            )
+
+        fetcher = FakeKenyaLawFetcher({})
+        async with self.Session() as db:
+            run = await kenyalaw_service.start_ingestion_run(
+                db,
+                IngestionRunCreate(dry_run=False, max_pages=1, max_documents=5),
+                fetcher=fetcher,
+                preflight_validator=failing_preflight,
+            )
+            self.assertEqual(run.status, "failed")
+            self.assertEqual(run.failed_count, 1)
+            self.assertEqual(run.discovered_count, 0)
+
+            events = await db.execute(
+                select(IngestionEvent)
+                .where(IngestionEvent.ingestion_run_id == run.id)
+                .order_by(IngestionEvent.id)
+            )
+            event_list = events.scalars().all()
+            failed_event = event_list[-1]
+            self.assertEqual(failed_event.event_type, "failed")
+            self.assertEqual(failed_event.stage, "preflight")
+            self.assertEqual(failed_event.error_type, "pinecone_dimension_mismatch")
+            self.assertEqual(
+                failed_event.message,
+                "Pinecone index dimension 3072 does not match embedding dimension 1536",
+            )
+
+    async def test_ingestion_run_can_be_created_then_executed_with_sse_history(self):
+        listing = """
+        <html><body>
+          <a href="/akn/ke/judgment/keelc/2024/10/">ELC case</a>
+        </body></html>
+        """
+        case = """
+        <html><head><title>Mwangi v Kamau [2024] KEELC 10 (KLR)</title></head>
+        <body>
+          <p>Court: Environment and Land Court at Nairobi</p>
+          <p>The plaintiff seeks an injunction over land parcel LR 1.</p>
+        </body></html>
+        """
+        fetcher = FakeKenyaLawFetcher({"KEELC": listing, "2024/10": case})
+        request = IngestionRunCreate(dry_run=True, max_pages=1, max_documents=5)
+        async with self.Session() as db:
+            run = await kenyalaw_service.create_ingestion_run(db, request)
+            self.assertEqual(run.status, "running")
+
+            started_events = await kenyalaw_service.get_ingestion_events(db, run.id)
+            self.assertEqual(started_events[0].event_type, "started")
+
+            completed = await kenyalaw_service.execute_ingestion_run(
+                db,
+                run.id,
+                request,
+                fetcher=fetcher,
+            )
+            self.assertIsNotNone(completed)
+            self.assertEqual(completed.status, "completed")
+            self.assertEqual(completed.indexed_count, 1)
+
+        chunks = []
+        async for chunk in kenyalaw_service.stream_ingestion_events(
+            run.id,
+            session_factory=self.Session,
+            poll_interval=0,
+        ):
+            chunks.append(chunk)
+        stream_payload = "".join(chunks)
+        self.assertIn('"event_type":"started"', stream_payload)
+        self.assertIn('"event_type":"completed"', stream_payload)
+
+    async def test_indexing_failure_records_judgment_url_event(self):
+        listing = """
+        <html><body>
+          <a href="/akn/ke/judgment/keelc/2024/10/">ELC case</a>
+        </body></html>
+        """
+        case = """
+        <html><head><title>Mwangi v Kamau [2024] KEELC 10 (KLR)</title></head>
+        <body>
+          <p>Court: Environment and Land Court at Nairobi</p>
+          <p>The plaintiff seeks an injunction over land parcel LR 1.</p>
+        </body></html>
+        """
+
+        def failing_index(*args, **kwargs):
+            raise RuntimeError("vector write rejected")
+
+        original = kenyalaw_service.index_markdown
+        kenyalaw_service.index_markdown = failing_index
+        try:
+            fetcher = FakeKenyaLawFetcher({"KEELC": listing, "2024/10": case})
+            async with self.Session() as db:
+                run = await kenyalaw_service.start_ingestion_run(
+                    db,
+                    IngestionRunCreate(dry_run=False, max_pages=1, max_documents=5),
+                    fetcher=fetcher,
+                    preflight_validator=lambda: None,
+                )
+                self.assertEqual(run.status, "failed")
+
+                events = await db.execute(
+                    select(IngestionEvent)
+                    .where(IngestionEvent.ingestion_run_id == run.id)
+                    .order_by(IngestionEvent.id)
+                )
+                failed_event = events.scalars().all()[-1]
+                self.assertEqual(failed_event.stage, "index")
+                self.assertEqual(failed_event.error_type, "RuntimeError")
+                self.assertIn("/akn/ke/judgment/keelc/2024/10/", failed_event.url)
+                self.assertEqual(failed_event.message, "vector write rejected")
+        finally:
+            kenyalaw_service.index_markdown = original
+
+    def test_verifier_uses_source_url_before_marking_verified(self):
+        original = kenyalaw_verifier.retrieve_context
+        try:
+            kenyalaw_verifier.retrieve_context = lambda *args, **kwargs: [
+                {
+                    "text": "The court grants temporary injunctions where the Giella principles are met.",
+                    "score": 0.9,
+                    "metadata": {
+                        "title": "Giella v Cassman Brown [1973] EA 358",
+                        "source_url": "https://new.kenyalaw.org/akn/ke/judgment/example",
+                        "neutral_citation": "[1973] EA 358",
+                        "court": "Court of Appeal",
+                    },
+                }
+            ]
+            matter = type(
+                "MatterStub",
+                (),
+                {
+                    "id": 1,
+                    "draft_content": "",
+                    "masked_facts": "",
+                    "citation_evidence": [
+                        type(
+                            "EvidenceStub",
+                            (),
+                            {
+                                "status": "pending",
+                                "citation_type": "precedent",
+                                "title": "Giella v Cassman Brown [1973] EA 358",
+                                "snippet": "temporary injunction principles",
+                            },
+                        )()
+                    ],
+                },
+            )()
+            evidence = kenyalaw_verifier.verify_matter_citations(matter)
+            self.assertEqual(evidence[0]["status"], "verified")
+            self.assertEqual(evidence[0]["source"], "Kenya Law")
+            self.assertIn("source_url", evidence[0])
+        finally:
+            kenyalaw_verifier.retrieve_context = original
 
 
 if __name__ == "__main__":

@@ -162,8 +162,13 @@ async def upsert_citation_evidence(
             citation_type=item["citation_type"],
             title=item["title"],
             source=item.get("source"),
+            source_url=item.get("source_url"),
+            neutral_citation=item.get("neutral_citation"),
+            court=item.get("court"),
+            judgment_date=item.get("judgment_date"),
             snippet=item["snippet"],
             confidence=item.get("confidence", 0.0),
+            confidence_breakdown=item.get("confidence_breakdown"),
             status=item.get("status", "pending"),
         )
         for item in evidence_items

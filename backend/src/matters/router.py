@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.database import get_db
 from src.auth.dependencies import get_current_user
 from src.auth.schemas import UserRead
+from src.kenyalaw.verifier import verify_matter_citations
 from src.matters import schemas, service
 
 router = APIRouter()
@@ -63,36 +64,27 @@ async def verify_citations(
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[UserRead, Depends(get_current_user)],
 ):
-    matter = await service.get_user_matter(db, current_user.id, matter_id)
-    await service.upsert_citation_evidence(
-        db,
-        matter,
-        [
-            {
-                "citation_type": "statute",
-                "title": "Limitation of Actions Act, Section 7",
-                "source": "Kenya Law",
-                "snippet": "An action may not be brought by any person to recover land after the end of twelve years from the date on which the right of action accrued.",
-                "confidence": 1.0,
-                "status": "verified",
-            },
-            {
-                "citation_type": "precedent",
-                "title": "Giella v. Cassman Brown & Co. Ltd [1973] EA 358",
-                "source": "eKLR reference corpus",
-                "snippet": "The conditions for grant of an interlocutory injunction include a prima facie case, irreparable injury, and balance of convenience.",
-                "confidence": 0.94,
-                "status": "verified",
-            },
-        ],
+    matter = await service.get_user_matter(
+        db, current_user.id, matter_id, include_related=True
     )
-    if matter.workflow_state == "draft_generated":
+    evidence = verify_matter_citations(matter)
+    await service.upsert_citation_evidence(db, matter, evidence)
+    verified_all = bool(evidence) and all(item.get("status") == "verified" for item in evidence)
+    if matter.workflow_state == "draft_generated" and verified_all:
         await service.transition_matter(
             db,
             matter,
             "citations_verified",
             activity_title="Citations verified",
-            activity_detail="All available citation evidence was reviewed.",
+            activity_detail="Indexed Kenya Law ELC authorities were checked.",
+        )
+    elif matter.workflow_state == "draft_generated":
+        await service.add_activity(
+            db,
+            matter,
+            event_type="citations_need_review",
+            title="Citations need review",
+            detail="One or more citations could not be verified against the ELC corpus.",
         )
     await db.commit()
     refreshed = await service.get_user_matter(

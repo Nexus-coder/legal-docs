@@ -557,7 +557,7 @@ function DraftingWorkspaceContent() {
               <div>
                 <CardLabel className="mb-3">Evidence snippet</CardLabel>
                 <div className="rounded-xl bg-slate-50 border border-slate-100 p-5 text-sm leading-relaxed text-slate-700 font-serif">
-                  "{selectedEvidence.snippet}"
+                  &quot;{selectedEvidence.snippet}&quot;
                 </div>
               </div>
               

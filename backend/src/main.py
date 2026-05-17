@@ -26,6 +26,7 @@ async def lifespan(app: FastAPI):
             await conn.run_sync(Base.metadata.create_all)
             if "sqlite" in settings.DATABASE_URL:
                 await conn.run_sync(_backfill_matter_workflow_columns)
+                await conn.run_sync(_backfill_citation_evidence_columns)
     yield
 
 
@@ -61,6 +62,35 @@ def _backfill_matter_workflow_columns(sync_conn):
         WHERE workflow_state IS NULL OR workflow_state = ''
         """
     )
+
+
+def _backfill_citation_evidence_columns(sync_conn):
+    tables = {
+        row[0]
+        for row in sync_conn.exec_driver_sql(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    if "citation_evidence" not in tables:
+        return
+    columns = {
+        row[1]
+        for row in sync_conn.exec_driver_sql(
+            "PRAGMA table_info(citation_evidence)"
+        ).fetchall()
+    }
+    additions = {
+        "source_url": "VARCHAR(500)",
+        "neutral_citation": "VARCHAR(255)",
+        "court": "VARCHAR(180)",
+        "judgment_date": "VARCHAR(40)",
+        "confidence_breakdown": "TEXT",
+    }
+    for name, ddl in additions.items():
+        if name not in columns:
+            sync_conn.exec_driver_sql(
+                f"ALTER TABLE citation_evidence ADD COLUMN {name} {ddl}"
+            )
 
 
 app_kwargs = {

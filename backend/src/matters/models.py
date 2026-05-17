@@ -67,8 +67,13 @@ class CitationEvidence(Base):
     citation_type: Mapped[str] = mapped_column(String(50), nullable=False)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     source: Mapped[str | None] = mapped_column(String(255))
+    source_url: Mapped[str | None] = mapped_column(String(500))
+    neutral_citation: Mapped[str | None] = mapped_column(String(255))
+    court: Mapped[str | None] = mapped_column(String(180))
+    judgment_date: Mapped[str | None] = mapped_column(String(40))
     snippet: Mapped[str] = mapped_column(Text, nullable=False)
     confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    confidence_breakdown: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(50), default="pending")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 

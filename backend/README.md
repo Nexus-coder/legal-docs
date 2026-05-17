@@ -128,6 +128,22 @@ curl -X POST http://localhost:8000/api/pii/detect \
 | `/api/admin` | Admin | System administration |
 | `/api/stats` | Dashboard | Aggregated statistics |
 
+### Kenya Law ELC Corpus
+
+The admin API includes an ELC-first Kenya Law ingestion path for civil litigation
+authorities:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/admin/kenyalaw/ingestion-runs` | Discover, filter, fetch, and index Environment and Land Court judgments from Kenya Law |
+| `GET` | `/api/admin/kenyalaw/ingestion-runs/{run_id}` | Inspect ingestion status and counts |
+| `POST` | `/api/admin/kenyalaw/ingestion-runs/{run_id}/retry-failures` | Retry failed judgment URLs from an earlier run |
+| `GET` | `/api/admin/kenyalaw/corpus-stats` | Return indexed document, chunk, and failure counts |
+
+The default start URL is `https://new.kenyalaw.org/judgments/KEELC/`. Ingestion
+keeps provenance metadata on every chunk so citation verification can return a
+source URL, court, citation, date, confidence breakdown, and bounded snippet.
+
 ### Matter Workflow States
 
 Matter transitions are restricted to `created` -> `facts_entered` -> `pii_masked` -> `draft_generated` -> `citations_verified` -> `export_ready`. The service rejects invalid jumps, duplicate transitions are idempotent, and callers may pass an expected state to detect stale clients. Drafting and PII routes require JWT auth and verify that the selected matter belongs to the current user.
