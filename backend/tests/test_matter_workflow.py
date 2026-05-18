@@ -1,4 +1,7 @@
 import unittest
+import zipfile
+from datetime import datetime, timezone
+from io import BytesIO
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -10,9 +13,17 @@ from src.matters.schemas import MatterCreate, MatterRead
 from src.matters import service
 from src.drafting.router import _classify_drafting_error, _drafting_status_from_state
 from src.ingestion.indexer import PineconeDimensionMismatch, validate_pinecone_index_dimension
-from src.kenyalaw.fetcher import FetchResult
+from src.kenyalaw.extraction import (
+    REJECTED_SHELL_TEXT,
+    VALID_EXTRACTION,
+    assess_judgment_text_quality,
+    extract_judgment_source,
+    extract_source_text,
+    resolve_source_candidates,
+)
+from src.kenyalaw.fetcher import FetchBinaryResult, FetchResult, KenyaLawFetchError
 from src.kenyalaw.filtering import is_elc_relevant
-from src.kenyalaw.models import CaseDocument, IngestionEvent
+from src.kenyalaw.models import CaseChunk, CaseDocument, IngestionEvent, LegalSource
 from src.kenyalaw.parser import parse_case_html
 from src.kenyalaw.schemas import IngestionRunCreate
 from src.kenyalaw import service as kenyalaw_service
@@ -24,10 +35,91 @@ class FakeKenyaLawFetcher:
         self.pages = pages
 
     def fetch_text(self, url):
-        for key, content in self.pages.items():
+        for key, content in sorted(self.pages.items(), key=lambda item: len(item[0]), reverse=True):
             if key in url:
-                return FetchResult(url=url, content=content, content_type="text/html")
+                body, content_type = self._payload(content)
+                if isinstance(body, bytes):
+                    body = body.decode("utf-8", errors="replace")
+                return FetchResult(url=url, content=body, content_type=content_type)
         raise AssertionError(f"Unexpected fetch URL: {url}")
+
+    def fetch_bytes(self, url):
+        for key, content in sorted(self.pages.items(), key=lambda item: len(item[0]), reverse=True):
+            if key in url:
+                body, content_type = self._payload(content)
+                if isinstance(body, str):
+                    body = body.encode("utf-8")
+                return FetchBinaryResult(url=url, content=body, content_type=content_type)
+        raise KenyaLawFetchError(url, "http_404", "Not found")
+
+    @staticmethod
+    def _payload(content):
+        if isinstance(content, tuple):
+            return content
+        return content, "text/html"
+
+
+def realistic_judgment_text() -> str:
+    return """
+    REPUBLIC OF KENYA
+    IN THE ENVIRONMENT AND LAND COURT AT NAIROBI
+    Mwangi v Kamau [2024] KEELC 10 (KLR)
+
+    JUDGMENT
+
+    1. The plaintiff filed this suit seeking a permanent injunction over land parcel LR 1.
+    The defendant opposed the application and contended that the title was acquired lawfully.
+
+    2. The court has considered the pleadings, the evidence on occupation, and the rival
+    submissions on whether the applicant has established a prima facie case.
+
+    3. The dispute concerns ownership, use, and possession of land. The Environment and
+    Land Court therefore has jurisdiction to determine the claim and the application.
+
+    4. I find that the plaintiff has shown a registrable interest in the parcel and that
+    damages would not be an adequate remedy if the land is alienated before trial.
+
+    5. The application is allowed. The defendant is restrained from transferring,
+    charging, or interfering with LR 1 pending hearing of the suit. Costs shall abide
+    the outcome of the main suit.
+
+    DATED, SIGNED AND DELIVERED AT NAIROBI THIS 5TH DAY OF FEBRUARY 2024.
+    """
+
+
+def minimal_docx(text: str) -> bytes:
+    paragraphs = "".join(
+        f"<w:p><w:r><w:t>{line}</w:t></w:r></w:p>"
+        for line in text.strip().splitlines()
+        if line.strip()
+    )
+    document_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        f"<w:body>{paragraphs}</w:body></w:document>"
+    )
+    content_types = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/word/document.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+        "</Types>"
+    )
+    rels = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" '
+        'Target="word/document.xml"/></Relationships>'
+    )
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("[Content_Types].xml", content_types)
+        archive.writestr("_rels/.rels", rels)
+        archive.writestr("word/document.xml", document_xml)
+    return buffer.getvalue()
 
 
 class MatterWorkflowTests(unittest.IsolatedAsyncioTestCase):
@@ -267,6 +359,89 @@ class MatterWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(parsed.court, "Environment and Land Court at Nairobi")
         self.assertIn("temporary injunction", parsed.topic_tags)
 
+    def test_source_candidates_include_canonical_and_download_links(self):
+        html = """
+        <html><head><title>Mwangi v Kamau [2024] KEELC 10 (KLR)</title></head>
+        <body>
+          <a href="/akn/ke/judgment/keelc/2024/10/download.docx">Download DOCX</a>
+          <a href="/akn/ke/judgment/keelc/2024/10/source.pdf">Download PDF</a>
+          <button>Load document</button>
+        </body></html>
+        """
+        parsed = parse_case_html(
+            html,
+            "https://new.kenyalaw.org/akn/ke/judgment/keelc/2024/10/",
+        )
+        candidates = resolve_source_candidates(parsed.canonical_url, parsed.source_links)
+        self.assertEqual(
+            candidates[0].url,
+            "https://new.kenyalaw.org/akn/ke/judgment/keelc/2024/10/source",
+        )
+        self.assertEqual(candidates[1].source_format, "pdf")
+        self.assertIn("download.docx", [candidate.url for candidate in candidates][2])
+
+    def test_quality_gate_rejects_shell_text_and_accepts_judgment_body(self):
+        shell = """
+        Kenya Law Judgments Advanced Search Download DOCX Download PDF Load document
+        Home About Kenya Law Privacy Policy Footer National Council for Law Reporting
+        """
+        rejected = assess_judgment_text_quality(shell)
+        self.assertEqual(rejected.status, REJECTED_SHELL_TEXT)
+
+        accepted = assess_judgment_text_quality(
+            realistic_judgment_text(),
+            title="Mwangi v Kamau [2024] KEELC 10 (KLR)",
+            court="Environment and Land Court at Nairobi",
+        )
+        self.assertEqual(accepted.status, VALID_EXTRACTION)
+        self.assertGreaterEqual(accepted.score, 55)
+
+    def test_docx_source_extraction_produces_body_text(self):
+        page = """
+        <html><head><title>Mwangi v Kamau [2024] KEELC 10 (KLR)</title></head>
+        <body><a href="/akn/ke/judgment/keelc/2024/10/source">Download DOCX</a></body></html>
+        """
+        parsed = parse_case_html(
+            page,
+            "https://new.kenyalaw.org/akn/ke/judgment/keelc/2024/10/",
+        )
+        fetcher = FakeKenyaLawFetcher(
+            {
+                "2024/10/source": (
+                    minimal_docx(realistic_judgment_text()),
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                )
+            }
+        )
+        extracted = extract_judgment_source(fetcher, parsed)
+        self.assertEqual(extracted.source_format, "docx")
+        self.assertIn("permanent injunction over land parcel LR 1", extracted.text)
+
+    def test_legacy_doc_and_non_docx_zip_sources_do_not_raise_docx_key_error(self):
+        rtf_doc = (
+            r"{\rtf1\ansi REPUBLIC OF KENYA \par IN THE ENVIRONMENT AND LAND COURT "
+            r"AT NAIROBI \par JUDGMENT \par "
+            r"1. The plaintiff seeks an injunction over land parcel LR 1. \par "
+            r"2. The court considers the evidence and grants orders with costs.}"
+        )
+        text = extract_source_text(
+            rtf_doc.encode("utf-8"),
+            source_format="doc",
+            source_url="https://example.test/ruling.doc",
+        )
+        self.assertIn("REPUBLIC OF KENYA", text)
+        self.assertIn("injunction over land parcel LR 1", text)
+
+        buffer = BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr("judgment.txt", realistic_judgment_text())
+        zipped_text = extract_source_text(
+            buffer.getvalue(),
+            source_format="doc",
+            source_url="https://example.test/source",
+        )
+        self.assertIn("permanent injunction over land parcel LR 1", zipped_text)
+
     def test_pinecone_preflight_detects_dimension_mismatch(self):
         result = validate_pinecone_index_dimension(
             index_dimension_provider=lambda: 1536,
@@ -296,7 +471,9 @@ class MatterWorkflowTests(unittest.IsolatedAsyncioTestCase):
           <p>The plaintiff seeks an injunction over land parcel LR 1.</p>
         </body></html>
         """
-        fetcher = FakeKenyaLawFetcher({"KEELC": listing, "2024/10": case})
+        fetcher = FakeKenyaLawFetcher(
+            {"KEELC": listing, "2024/10/source": realistic_judgment_text(), "2024/10": case}
+        )
         async with self.Session() as db:
             run = await kenyalaw_service.start_ingestion_run(
                 db,
@@ -312,8 +489,11 @@ class MatterWorkflowTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(document_list), 1)
             document = document_list[0]
             self.assertEqual(document.fetch_status, "stored")
+            self.assertEqual(document.extraction_status, "valid")
+            self.assertEqual(document.source_document_url, "https://new.kenyalaw.org/akn/ke/judgment/keelc/2024/10/source")
             self.assertEqual(document.last_ingestion_run_id, run.id)
             self.assertIn("injunction over land parcel", document.normalized_text)
+            self.assertNotIn("Load document", document.normalized_text)
 
             listed = await kenyalaw_service.list_case_documents(db, query="Mwangi")
             self.assertEqual(listed["total"], 1)
@@ -325,6 +505,130 @@ class MatterWorkflowTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(detail["id"], document.id)
             self.assertIn("Mwangi v Kamau", detail["title"])
             self.assertEqual(len(detail["chunks"]), 1)
+            self.assertEqual(detail["extraction_status"], "valid")
+
+    async def test_navigation_only_source_is_not_stored_as_valid_text(self):
+        listing = """
+        <html><body>
+          <a href="/akn/ke/judgment/keelc/2024/10/">ELC case</a>
+        </body></html>
+        """
+        case = """
+        <html><head><title>Mwangi v Kamau [2024] KEELC 10 (KLR)</title></head>
+        <body>
+          <p>Court: Environment and Land Court at Nairobi</p>
+          <a href="/akn/ke/judgment/keelc/2024/10/source">Download DOCX</a>
+        </body></html>
+        """
+        shell_source = """
+        <html><body>
+          <nav>Kenya Law Judgments Advanced Search</nav>
+          <button>Load document</button>
+          <a>Download DOCX</a><a>Download PDF</a>
+          <footer>National Council for Law Reporting Privacy Policy</footer>
+        </body></html>
+        """
+        fetcher = FakeKenyaLawFetcher(
+            {"KEELC": listing, "2024/10/source": shell_source, "2024/10": case}
+        )
+        async with self.Session() as db:
+            run = await kenyalaw_service.start_ingestion_run(
+                db,
+                IngestionRunCreate(dry_run=True, max_pages=1, max_documents=5),
+                fetcher=fetcher,
+            )
+            self.assertEqual(run.status, "completed")
+            self.assertEqual(run.failed_count, 1)
+            self.assertEqual(run.indexed_count, 0)
+
+            document = (await db.execute(select(CaseDocument))).scalar_one()
+            self.assertEqual(document.fetch_status, "failed")
+            self.assertEqual(document.extraction_status, "rejected_shell_text")
+            self.assertIsNone(document.normalized_text)
+
+    async def test_repair_replaces_existing_chunks_and_vectors(self):
+        source_text = realistic_judgment_text()
+        original_index = kenyalaw_service.index_markdown
+        original_delete = kenyalaw_service.delete_document_vectors
+        indexed_payloads = []
+        deleted_urls = []
+
+        def fake_index(markdown, metadata, namespace=None):
+            indexed_payloads.append((markdown, metadata, namespace))
+            return 2
+
+        def fake_delete(canonical_url, namespace=None):
+            deleted_urls.append((canonical_url, namespace))
+
+        kenyalaw_service.index_markdown = fake_index
+        kenyalaw_service.delete_document_vectors = fake_delete
+        try:
+            async with self.Session() as db:
+                source = LegalSource(
+                    name="Kenya Law",
+                    base_url="https://new.kenyalaw.org",
+                )
+                db.add(source)
+                await db.flush()
+                document = CaseDocument(
+                    source_id=source.id,
+                    canonical_url="https://new.kenyalaw.org/akn/ke/judgment/keelc/2024/10/",
+                    title="Mwangi v Kamau [2024] KEELC 10 (KLR)",
+                    court="Environment and Land Court at Nairobi",
+                    source_format="html",
+                    extraction_status="valid",
+                    normalized_text="Load document Download PDF Kenya Law",
+                    normalized_hash="bad-hash",
+                    text_length=34,
+                    fetch_status="indexed",
+                    indexed_at=datetime.now(timezone.utc),
+                )
+                db.add(document)
+                await db.flush()
+                db.add(
+                    CaseChunk(
+                        case_document_id=document.id,
+                        chunk_index=0,
+                        text="Load document Download PDF Kenya Law",
+                        text_hash="bad",
+                        pinecone_vector_id="kenyalaw:1:0",
+                    )
+                )
+                await db.commit()
+
+                page = """
+                <html><head><title>Mwangi v Kamau [2024] KEELC 10 (KLR)</title></head>
+                <body><p>Court: Environment and Land Court at Nairobi</p></body></html>
+                """
+                fetcher = FakeKenyaLawFetcher(
+                    {"2024/10/source": source_text, "2024/10": page}
+                )
+                run = await kenyalaw_service.create_document_repair_run(db)
+                completed = await kenyalaw_service.execute_document_repair_run(
+                    db,
+                    run.id,
+                    fetcher=fetcher,
+                    preflight_validator=lambda: None,
+                )
+                self.assertEqual(completed.status, "completed")
+                self.assertEqual(completed.indexed_count, 1)
+                self.assertEqual(deleted_urls[0][0], document.canonical_url)
+                self.assertEqual(deleted_urls[0][1], kenyalaw_service.PINECONE_NAMESPACE)
+                self.assertEqual(indexed_payloads[0][2], kenyalaw_service.PINECONE_NAMESPACE)
+
+                repaired = await db.get(CaseDocument, document.id)
+                self.assertEqual(repaired.extraction_status, "valid")
+                self.assertIn("permanent injunction over land parcel LR 1", repaired.normalized_text)
+                chunks = (
+                    await db.execute(
+                        select(CaseChunk).where(CaseChunk.case_document_id == document.id)
+                    )
+                ).scalars().all()
+                self.assertEqual(len(chunks), 1)
+                self.assertNotIn("Load document", chunks[0].text)
+        finally:
+            kenyalaw_service.index_markdown = original_index
+            kenyalaw_service.delete_document_vectors = original_delete
 
     async def test_preflight_failure_records_readable_event(self):
         def failing_preflight():
@@ -375,7 +679,9 @@ class MatterWorkflowTests(unittest.IsolatedAsyncioTestCase):
           <p>The plaintiff seeks an injunction over land parcel LR 1.</p>
         </body></html>
         """
-        fetcher = FakeKenyaLawFetcher({"KEELC": listing, "2024/10": case})
+        fetcher = FakeKenyaLawFetcher(
+            {"KEELC": listing, "2024/10/source": realistic_judgment_text(), "2024/10": case}
+        )
         request = IngestionRunCreate(dry_run=True, max_pages=1, max_documents=5)
         async with self.Session() as db:
             run = await kenyalaw_service.create_ingestion_run(db, request)
@@ -425,7 +731,9 @@ class MatterWorkflowTests(unittest.IsolatedAsyncioTestCase):
         original = kenyalaw_service.index_markdown
         kenyalaw_service.index_markdown = failing_index
         try:
-            fetcher = FakeKenyaLawFetcher({"KEELC": listing, "2024/10": case})
+            fetcher = FakeKenyaLawFetcher(
+                {"KEELC": listing, "2024/10/source": realistic_judgment_text(), "2024/10": case}
+            )
             async with self.Session() as db:
                 run = await kenyalaw_service.start_ingestion_run(
                     db,

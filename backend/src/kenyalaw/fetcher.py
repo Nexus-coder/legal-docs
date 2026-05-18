@@ -18,6 +18,13 @@ class FetchResult:
     content_type: str
 
 
+@dataclass(frozen=True)
+class FetchBinaryResult:
+    url: str
+    content: bytes
+    content_type: str
+
+
 class KenyaLawFetcher:
     def __init__(self, *, timeout_seconds: int = 20, delay_seconds: float = 1.0):
         self.timeout_seconds = timeout_seconds
@@ -25,6 +32,34 @@ class KenyaLawFetcher:
         self._last_fetch_at = 0.0
 
     def fetch_text(self, url: str) -> FetchResult:
+        fetched = self._fetch(
+            url,
+            accept="text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8",
+        )
+        charset = fetched.get("charset") or "utf-8"
+        return FetchResult(
+            url=fetched["url"],
+            content=fetched["content"].decode(charset, errors="replace"),
+            content_type=fetched["content_type"],
+        )
+
+    def fetch_bytes(self, url: str) -> FetchBinaryResult:
+        fetched = self._fetch(
+            url,
+            accept=(
+                "application/pdf,"
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document,"
+                "application/msword,"
+                "text/html;q=0.8,text/plain;q=0.8,*/*;q=0.5"
+            ),
+        )
+        return FetchBinaryResult(
+            url=fetched["url"],
+            content=fetched["content"],
+            content_type=fetched["content_type"],
+        )
+
+    def _fetch(self, url: str, *, accept: str) -> dict:
         elapsed = time.monotonic() - self._last_fetch_at
         if elapsed < self.delay_seconds:
             time.sleep(self.delay_seconds - elapsed)
@@ -33,7 +68,7 @@ class KenyaLawFetcher:
             url,
             headers={
                 "User-Agent": "LegalDocs ELC Corpus Bot/1.0 (polite research indexing)",
-                "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8",
+                "Accept": accept,
             },
         )
         try:
@@ -41,16 +76,16 @@ class KenyaLawFetcher:
                 self._last_fetch_at = time.monotonic()
                 raw = response.read()
                 content_type = response.headers.get("Content-Type", "")
-                charset = response.headers.get_content_charset() or "utf-8"
-                return FetchResult(
-                    url=response.geturl(),
-                    content=raw.decode(charset, errors="replace"),
-                    content_type=content_type,
-                )
+                charset = response.headers.get_content_charset()
+                return {
+                    "url": response.geturl(),
+                    "content": raw,
+                    "content_type": content_type,
+                    "charset": charset,
+                }
         except HTTPError as exc:
             raise KenyaLawFetchError(url, f"http_{exc.code}", str(exc)) from exc
         except URLError as exc:
             raise KenyaLawFetchError(url, "network_error", str(exc.reason)) from exc
         except TimeoutError as exc:
             raise KenyaLawFetchError(url, "timeout", "Timed out fetching Kenya Law") from exc
-

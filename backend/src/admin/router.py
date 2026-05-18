@@ -123,6 +123,20 @@ async def list_kenyalaw_documents(
     )
 
 
+@router.post(
+    "/kenyalaw/documents/repair",
+    response_model=kenyalaw_schemas.IngestionRunRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def repair_kenyalaw_documents(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    background_tasks: BackgroundTasks,
+):
+    run = await kenyalaw_service.create_document_repair_run(db)
+    background_tasks.add_task(kenyalaw_service.run_document_repair_background, run.id)
+    return run
+
+
 @router.get(
     "/kenyalaw/documents/{document_id}",
     response_model=kenyalaw_schemas.CaseDocumentDetail,

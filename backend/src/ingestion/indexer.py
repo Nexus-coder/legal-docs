@@ -136,6 +136,21 @@ def index_markdown(text: str, source_metadata: dict, namespace: str | None = Non
     return len(nodes)
 
 
+def delete_document_vectors(canonical_url: str, namespace: str | None = None) -> None:
+    """Remove vectors previously indexed for a Kenya Law canonical URL."""
+    api_key = settings.PINECONE_API_KEY
+    index_name = settings.PINECONE_INDEX_NAME
+    if not api_key or not index_name:
+        raise ValueError("Missing Pinecone credentials in environment.")
+
+    pc = Pinecone(api_key=api_key)
+    pinecone_index = pc.Index(index_name)
+    delete_kwargs: dict[str, Any] = {"filter": {"canonical_url": {"$eq": canonical_url}}}
+    if namespace:
+        delete_kwargs["namespace"] = namespace
+    pinecone_index.delete(**delete_kwargs)
+
+
 def retrieve_context(
     query: str,
     similarity_top_k: int = 3,

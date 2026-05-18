@@ -13,8 +13,13 @@ from src.database import SessionFactory
 from src.ingestion.indexer import (
     PineconeDimensionMismatch,
     PineconePreflightError,
+    delete_document_vectors,
     index_markdown,
     validate_pinecone_index_dimension,
+)
+from src.kenyalaw.extraction import (
+    SourceExtractionFailure,
+    extract_judgment_source,
 )
 from src.kenyalaw.fetcher import KenyaLawFetchError, KenyaLawFetcher
 from src.kenyalaw.filtering import is_elc_relevant
@@ -26,7 +31,12 @@ from src.kenyalaw.models import (
     IngestionRun,
     LegalSource,
 )
-from src.kenyalaw.parser import ParsedCase, parse_case_html, parse_listing_links
+from src.kenyalaw.parser import (
+    ParsedCase,
+    parse_case_html,
+    parse_listing_links,
+    parsed_case_from_source,
+)
 from src.kenyalaw.schemas import IngestionEventRead, IngestionRunCreate
 
 logger = logging.getLogger(__name__)
@@ -295,6 +305,129 @@ async def retry_failed_urls(
     return retry_run
 
 
+async def create_document_repair_run(db: AsyncSession) -> IngestionRun:
+    result = await db.execute(select(func.count()).select_from(CaseDocument))
+    document_count = result.scalar_one() or 0
+    run = IngestionRun(
+        source=KENYA_LAW_SOURCE["name"],
+        scope="elc-repair",
+        status="running",
+        dry_run=0,
+        discovered_count=document_count,
+    )
+    db.add(run)
+    await db.commit()
+    await db.refresh(run)
+    await _record_event(
+        db,
+        run,
+        "started",
+        "start",
+        f"Created Kenya Law source repair run for {document_count} stored documents.",
+    )
+    return run
+
+
+async def run_document_repair_background(run_id: int) -> None:
+    async with SessionFactory() as db:
+        await execute_document_repair_run(db, run_id)
+
+
+async def execute_document_repair_run(
+    db: AsyncSession,
+    run_id: int,
+    *,
+    fetcher: KenyaLawFetcher | None = None,
+    preflight_validator: PreflightValidator | None = None,
+) -> IngestionRun | None:
+    run = await get_ingestion_run(db, run_id)
+    if run is None:
+        return None
+    fetcher = fetcher or KenyaLawFetcher()
+    try:
+        await _record_event(
+            db,
+            run,
+            "indexing",
+            "preflight",
+            "Checking Pinecone before replacing repaired vectors.",
+        )
+        if preflight_validator is None:
+            validate_pinecone_index_dimension()
+        else:
+            preflight_validator()
+        await _record_event(
+            db,
+            run,
+            "indexing",
+            "preflight",
+            "Pinecone index dimension matches the configured embedding model.",
+        )
+
+        source = await _get_or_create_source(db)
+        result = await db.execute(select(CaseDocument.canonical_url).order_by(CaseDocument.id))
+        urls = [url for url in result.scalars().all() if url]
+        run.discovered_count = len(urls)
+        await _record_event(
+            db,
+            run,
+            "discovered",
+            "discover",
+            f"Repair will reprocess {len(urls)} stored Kenya Law documents.",
+        )
+        for url in urls:
+            await _process_case_url(
+                db,
+                run,
+                source,
+                url,
+                fetcher,
+                dry_run=False,
+                force_reindex=True,
+            )
+        run.status = "completed"
+        run.finished_at = datetime.now(timezone.utc)
+        await _record_event(
+            db,
+            run,
+            "completed",
+            "verify",
+            "Kenya Law source repair completed.",
+        )
+    except PineconeDimensionMismatch as exc:
+        await _fail_run(
+            db,
+            run,
+            KENYA_LAW_SOURCE["base_url"],
+            "preflight",
+            "pinecone_dimension_mismatch",
+            str(exc),
+        )
+    except PineconePreflightError as exc:
+        await _fail_run(
+            db,
+            run,
+            KENYA_LAW_SOURCE["base_url"],
+            "preflight",
+            "pinecone_preflight_failed",
+            str(exc),
+        )
+    except FatalIngestionError as exc:
+        await _fail_run(db, run, exc.url, exc.stage, exc.error_type, exc.message)
+    except Exception as exc:
+        await _fail_run(
+            db,
+            run,
+            KENYA_LAW_SOURCE["base_url"],
+            "run",
+            exc.__class__.__name__,
+            str(exc),
+        )
+        logger.exception("kenyalaw_repair_failed run_id=%s", run.id)
+    await db.refresh(run)
+    return run
+
+
 async def get_corpus_stats(db: AsyncSession) -> dict:
     documents = await db.scalar(select(func.count()).select_from(CaseDocument))
     indexed_documents = await db.scalar(
@@ -538,7 +671,12 @@ def _document_payload(document: CaseDocument, *, chunk_count: int) -> dict:
         "court": document.court,
         "judgment_date": document.judgment_date,
         "topic_tags": _topic_tags(document.topic_tags),
-        "source_format": document.source_format,
+        "source_format": document.source_format or "html",
+        "source_document_url": document.source_document_url,
+        "extraction_status": document.extraction_status or "valid",
+        "extraction_error": document.extraction_error,
+        "extracted_at": document.extracted_at,
+        "text_quality_score": document.text_quality_score or 0,
         "fetch_status": document.fetch_status,
         "indexed_at": document.indexed_at,
         "stored_at": document.stored_at,
@@ -648,6 +786,7 @@ async def _process_case_url(
     fetcher: KenyaLawFetcher,
     *,
     dry_run: bool,
+    force_reindex: bool = False,
 ) -> None:
     await _record_event(
         db,
@@ -659,7 +798,7 @@ async def _process_case_url(
     )
     try:
         fetched = fetcher.fetch_text(url)
-        parsed = parse_case_html(fetched.content, fetched.url)
+        page_parsed = parse_case_html(fetched.content, fetched.url)
     except KenyaLawFetchError as exc:
         run.failed_count += 1
         db.add(
@@ -700,6 +839,36 @@ async def _process_case_url(
             error_type="parse_error",
         )
         return
+
+    await _record_event(
+        db,
+        run,
+        "fetching",
+        "fetch",
+        "Resolving and extracting the Kenya Law source document.",
+        url=page_parsed.canonical_url,
+    )
+    try:
+        extracted = extract_judgment_source(fetcher, page_parsed)
+    except SourceExtractionFailure as exc:
+        await _record_extraction_failure(
+            db,
+            run,
+            source,
+            page_parsed,
+            exc,
+            dry_run=dry_run,
+        )
+        return
+
+    parsed = parsed_case_from_source(
+        page_parsed,
+        text=extracted.text,
+        source_url=extracted.url,
+        source_format=extracted.source_format,
+        raw_content=extracted.raw_content,
+        text_quality_score=extracted.quality.score,
+    )
 
     if not is_elc_relevant(title=parsed.title, court=parsed.court, text=parsed.text[:5000]):
         run.skipped_count += 1
@@ -745,7 +914,7 @@ async def _process_case_url(
         )
         return
 
-    if already_indexed_current:
+    if already_indexed_current and not force_reindex:
         document.fetch_status = "indexed"
         run.skipped_count += 1
         await _record_event(
@@ -766,6 +935,8 @@ async def _process_case_url(
         url=parsed.canonical_url,
     )
     try:
+        if force_reindex or document.indexed_at:
+            delete_document_vectors(parsed.canonical_url, namespace=PINECONE_NAMESPACE)
         node_count = index_markdown(
             _markdown_for(parsed), _metadata_for(parsed), namespace=PINECONE_NAMESPACE
         )
@@ -802,6 +973,7 @@ async def _upsert_case_document(
         document
         and document.indexed_at
         and document.normalized_hash == parsed.normalized_hash
+        and document.extraction_status == "valid"
     )
     if document is None:
         document = CaseDocument(source_id=source.id, canonical_url=parsed.canonical_url)
@@ -813,6 +985,11 @@ async def _upsert_case_document(
     document.judgment_date = parsed.judgment_date
     document.topic_tags = json.dumps(parsed.topic_tags)
     document.source_format = parsed.source_format
+    document.source_document_url = parsed.source_document_url
+    document.extraction_status = parsed.extraction_status
+    document.extraction_error = parsed.extraction_error
+    document.extracted_at = datetime.now(timezone.utc)
+    document.text_quality_score = parsed.text_quality_score
     document.raw_hash = parsed.raw_hash
     document.normalized_hash = parsed.normalized_hash
     document.normalized_text = parsed.text
@@ -823,6 +1000,87 @@ async def _upsert_case_document(
     document.last_seen_at = datetime.now(timezone.utc)
     await db.flush()
     return document, already_indexed_current
+
+
+async def _record_extraction_failure(
+    db: AsyncSession,
+    run: IngestionRun,
+    source: LegalSource,
+    parsed: ParsedCase,
+    failure: SourceExtractionFailure,
+    *,
+    dry_run: bool,
+) -> None:
+    run.failed_count += 1
+    document = await _upsert_failed_case_document(db, source, parsed, failure, run_id=run.id)
+    await db.execute(delete(CaseChunk).where(CaseChunk.case_document_id == document.id))
+    if not dry_run and document.indexed_at:
+        try:
+            delete_document_vectors(parsed.canonical_url, namespace=PINECONE_NAMESPACE)
+        except Exception as exc:
+            raise FatalIngestionError(
+                url=parsed.canonical_url,
+                stage="index",
+                error_type=exc.__class__.__name__,
+                message=f"Unable to delete stale vectors before marking extraction failure: {exc}",
+            ) from exc
+    document.indexed_at = None
+    db.add(
+        IngestionError(
+            ingestion_run_id=run.id,
+            url=parsed.canonical_url,
+            error_type=failure.status,
+            message=failure.message,
+        )
+    )
+    await _record_event(
+        db,
+        run,
+        "failed",
+        "fetch",
+        failure.message,
+        url=parsed.canonical_url,
+        error_type=failure.status,
+    )
+
+
+async def _upsert_failed_case_document(
+    db: AsyncSession,
+    source: LegalSource,
+    parsed: ParsedCase,
+    failure: SourceExtractionFailure,
+    *,
+    run_id: int,
+) -> CaseDocument:
+    result = await db.execute(
+        select(CaseDocument).where(CaseDocument.canonical_url == parsed.canonical_url)
+    )
+    document = result.scalar_one_or_none()
+    if document is None:
+        document = CaseDocument(source_id=source.id, canonical_url=parsed.canonical_url)
+        db.add(document)
+
+    document.title = parsed.title
+    document.neutral_citation = parsed.neutral_citation
+    document.court = parsed.court
+    document.judgment_date = parsed.judgment_date
+    document.topic_tags = json.dumps(parsed.topic_tags)
+    document.source_format = failure.source_format or parsed.source_format
+    document.source_document_url = failure.url
+    document.extraction_status = failure.status
+    document.extraction_error = failure.message
+    document.extracted_at = datetime.now(timezone.utc)
+    document.text_quality_score = failure.score
+    document.raw_hash = parsed.raw_hash
+    document.normalized_hash = None
+    document.normalized_text = None
+    document.text_length = 0
+    document.fetch_status = "failed"
+    document.stored_at = None
+    document.last_ingestion_run_id = run_id
+    document.last_seen_at = datetime.now(timezone.utc)
+    await db.flush()
+    return document
 
 
 async def _replace_chunks(db: AsyncSession, document: CaseDocument, parsed: ParsedCase) -> None:
@@ -854,6 +1112,10 @@ def _metadata_for(parsed: ParsedCase) -> dict:
         "court": parsed.court or "",
         "judgment_date": parsed.judgment_date or "",
         "topic_tags": ",".join(parsed.topic_tags),
+        "source_document_url": parsed.source_document_url or "",
+        "source_format": parsed.source_format,
+        "extraction_status": parsed.extraction_status,
+        "text_quality_score": parsed.text_quality_score,
         "document_hash": parsed.normalized_hash,
         "corpus_scope": "elc",
     }

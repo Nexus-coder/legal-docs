@@ -77,6 +77,7 @@ export default function AdminScreen() {
   const [activeView, setActiveView] = useState<"runs" | "library">("runs");
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
+  const [repairing, setRepairing] = useState(false);
   const [connection, setConnection] = useState<"idle" | "connecting" | "live" | "reconnecting" | "closed">("idle");
   const [error, setError] = useState<string | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
@@ -176,6 +177,27 @@ export default function AdminScreen() {
       setError(err instanceof Error ? err.message : "Unable to start ingestion");
     } finally {
       setStarting(false);
+    }
+  }
+
+  async function startRepair() {
+    setRepairing(true);
+    setError(null);
+    setEvents([]);
+    setActiveView("runs");
+    try {
+      const res = await fetch(`${API_BASE_URL}admin/kenyalaw/documents/repair`, {
+        method: "POST",
+      });
+      if (!res.ok) throw new Error("Unable to start Kenya Law source repair");
+      const run: IngestionRun = await res.json();
+      setActiveRun(run);
+      setStats((current) => ({ ...current, latest_run: run }));
+      connectToRun(run.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to start source repair");
+    } finally {
+      setRepairing(false);
     }
   }
 
@@ -298,21 +320,29 @@ export default function AdminScreen() {
                     <button
                       className="rounded-md border border-slate-200 px-3 py-3 text-xs font-extrabold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                       onClick={() => startIngestion(true)}
-                      disabled={starting || runIsActive}
+                      disabled={starting || repairing || runIsActive}
                     >
                       <i className="fas fa-vial mr-2" aria-hidden="true"></i>Dry-run
                     </button>
                     <button
                       className="rounded-md bg-slate-950 px-3 py-3 text-xs font-extrabold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
                       onClick={() => startIngestion(false)}
-                      disabled={starting || runIsActive || !canFullSync}
+                      disabled={starting || repairing || runIsActive || !canFullSync}
                     >
                       <i className="fas fa-cloud-arrow-up mr-2" aria-hidden="true"></i>Sync 25 cases
                     </button>
                   </div>
+                  <button
+                    className="mt-2 w-full rounded-md border border-amber-200 bg-amber-50 px-3 py-3 text-xs font-extrabold text-amber-800 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    onClick={startRepair}
+                    disabled={starting || repairing || runIsActive || !canFullSync || stats.documents === 0}
+                  >
+                    <i className="fas fa-screwdriver-wrench mr-2" aria-hidden="true"></i>
+                    Repair source text
+                  </button>
                   {!canFullSync ? (
                     <p className="mt-3 text-xs font-semibold leading-5 text-amber-700">
-                      Full sync is locked until the Pinecone preflight passes. Dry-run remains available.
+                      Full sync and repair are locked until the Pinecone preflight passes. Dry-run remains available.
                     </p>
                   ) : null}
                   {error ? <p className="mt-3 text-xs font-bold text-red-600">{error}</p> : null}

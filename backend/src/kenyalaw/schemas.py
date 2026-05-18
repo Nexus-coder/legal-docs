@@ -84,6 +84,11 @@ class CaseDocumentSummary(CustomBaseModel):
     judgment_date: str | None = None
     topic_tags: list[str] = []
     source_format: str
+    source_document_url: str | None = None
+    extraction_status: str = "valid"
+    extraction_error: str | None = None
+    extracted_at: datetime | None = None
+    text_quality_score: int = 0
     fetch_status: str
     indexed_at: datetime | None = None
     stored_at: datetime | None = None

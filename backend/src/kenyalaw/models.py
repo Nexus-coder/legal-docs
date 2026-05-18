@@ -39,6 +39,13 @@ class CaseDocument(Base):
     judgment_date: Mapped[str | None] = mapped_column(String(40), index=True)
     topic_tags: Mapped[str | None] = mapped_column(Text)
     source_format: Mapped[str] = mapped_column(String(30), default="html")
+    source_document_url: Mapped[str | None] = mapped_column(String(500))
+    extraction_status: Mapped[str] = mapped_column(
+        String(40), default="valid", index=True
+    )
+    extraction_error: Mapped[str | None] = mapped_column(Text)
+    extracted_at: Mapped[datetime | None] = mapped_column(DateTime)
+    text_quality_score: Mapped[int] = mapped_column(Integer, default=0)
     raw_hash: Mapped[str | None] = mapped_column(String(64), index=True)
     normalized_hash: Mapped[str | None] = mapped_column(String(64), index=True)
     normalized_text: Mapped[str | None] = mapped_column(Text)

@@ -114,6 +114,11 @@ def _backfill_case_document_columns(sync_conn):
         "text_length": "INTEGER DEFAULT 0",
         "stored_at": "DATETIME",
         "last_ingestion_run_id": "INTEGER",
+        "source_document_url": "VARCHAR(500)",
+        "extraction_status": "VARCHAR(40) DEFAULT 'valid'",
+        "extraction_error": "TEXT",
+        "extracted_at": "DATETIME",
+        "text_quality_score": "INTEGER DEFAULT 0",
     }
     for name, ddl in additions.items():
         if name not in columns:

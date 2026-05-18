@@ -12,6 +12,11 @@ type SourceDocumentSummary = {
   judgment_date?: string | null;
   topic_tags: string[];
   source_format: string;
+  source_document_url?: string | null;
+  extraction_status: string;
+  extraction_error?: string | null;
+  extracted_at?: string | null;
+  text_quality_score: number;
   fetch_status: string;
   indexed_at?: string | null;
   stored_at?: string | null;
@@ -203,14 +208,16 @@ export function SourceLibrary() {
               {documents.map((document) => (
                 <button
                   key={document.id}
-                  className={`grid w-full grid-cols-[minmax(0,1fr)_auto] gap-4 px-5 py-4 text-left transition hover:bg-slate-50 ${
-                    selectedId === document.id ? "bg-blue-50/70" : "bg-white"
+                  className={`grid w-full grid-cols-[minmax(0,1fr)_auto] gap-4 border-l-4 px-5 py-4 text-left transition hover:bg-slate-50 ${
+                    selectedId === document.id ? "border-l-blue-400 bg-blue-50/70" : extractionRowClass(document.extraction_status)
                   }`}
                   onClick={() => selectDocument(document.id)}
                 >
                   <span className="min-w-0">
                     <span className="flex flex-wrap items-center gap-2">
                       <SourceStatusPill status={document.fetch_status} />
+                      <ExtractionStatusPill status={document.extraction_status} />
+                      <span className="status-badge status-slate">{document.source_format}</span>
                       {document.neutral_citation ? (
                         <span className="font-mono text-[11px] font-bold text-slate-500">{document.neutral_citation}</span>
                       ) : null}
@@ -231,6 +238,7 @@ export function SourceLibrary() {
                     <span className="font-mono text-[11px] font-bold text-slate-400">#{document.id}</span>
                     <span className="text-xs font-bold text-slate-600">{document.chunk_count} chunks</span>
                     <span className="text-xs font-semibold text-slate-400">{formatCount(document.text_length)} chars</span>
+                    <span className="text-xs font-semibold text-slate-400">Q {document.text_quality_score}</span>
                   </span>
                 </button>
               ))}
@@ -301,6 +309,8 @@ function SourceDocumentReader({
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <SourceStatusPill status={activeDocument.fetch_status} />
+                  <ExtractionStatusPill status={activeDocument.extraction_status} />
+                  <span className="status-badge status-slate">{activeDocument.source_format}</span>
                   {activeDocument.last_ingestion_run_id ? (
                     <span className="status-badge status-slate">Run #{activeDocument.last_ingestion_run_id}</span>
                   ) : null}
@@ -318,14 +328,30 @@ function SourceDocumentReader({
               >
                 <i className="fas fa-up-right-from-square" aria-hidden="true"></i> Source
               </a>
+              {activeDocument.source_document_url ? (
+                <a
+                  className="ld-secondary-action"
+                  href={activeDocument.source_document_url}
+                  rel="noreferrer"
+                  target="_blank"
+                >
+                  <i className="fas fa-file-arrow-down" aria-hidden="true"></i> Extracted
+                </a>
+              ) : null}
             </div>
 
-            <div className="mt-5 grid grid-cols-2 gap-3 text-xs md:grid-cols-4">
+            <div className="mt-5 grid grid-cols-2 gap-3 text-xs md:grid-cols-5">
               <ReaderStat label="Citation" value={activeDocument.neutral_citation ?? "--"} />
               <ReaderStat label="Chunks" value={activeDocument.chunk_count} />
               <ReaderStat label="Text" value={formatCount(activeDocument.text_length)} />
-              <ReaderStat label="Seen" value={formatShortDate(activeDocument.last_seen_at)} />
+              <ReaderStat label="Quality" value={activeDocument.text_quality_score} />
+              <ReaderStat label="Extracted" value={formatShortDate(activeDocument.extracted_at)} />
             </div>
+            {activeDocument.extraction_status !== "valid" ? (
+              <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold leading-5 text-red-800">
+                {activeDocument.extraction_error ?? "Source text extraction did not produce a valid judgment body."}
+              </div>
+            ) : null}
           </div>
 
           <div className="flex border-b border-slate-200 bg-slate-50 p-1">
@@ -417,12 +443,29 @@ function SourceStatusPill({ status }: { status: string }) {
   return <span className={`status-badge ${sourceStatusClass(status)}`}>{status}</span>;
 }
 
+function ExtractionStatusPill({ status }: { status: string }) {
+  return <span className={`status-badge ${extractionStatusClass(status)}`}>{status}</span>;
+}
+
 function sourceStatusClass(status: string) {
   if (status === "indexed") return "status-green";
   if (status === "stored" || status === "fetched") return "status-blue";
   if (status === "failed") return "status-red";
   if (status === "skipped") return "status-amber";
   return "status-slate";
+}
+
+function extractionStatusClass(status: string) {
+  if (status === "valid") return "status-green";
+  if (status === "source_missing" || status === "rejected_shell_text") return "status-amber";
+  if (status === "source_extraction_failed") return "status-red";
+  return "status-slate";
+}
+
+function extractionRowClass(status: string) {
+  if (status === "valid") return "border-l-transparent bg-white";
+  if (status === "source_extraction_failed") return "border-l-red-400 bg-red-50/50";
+  return "border-l-amber-400 bg-amber-50/50";
 }
 
 function LibraryEmptyState({ icon, title }: { icon: string; title: string }) {

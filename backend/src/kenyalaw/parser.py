@@ -8,6 +8,12 @@ from src.kenyalaw.filtering import normalize_space, topic_tags_for
 
 
 @dataclass(frozen=True)
+class ParsedSourceLink:
+    url: str
+    label: str
+
+
+@dataclass(frozen=True)
 class ParsedCase:
     canonical_url: str
     title: str
@@ -19,16 +25,24 @@ class ParsedCase:
     raw_hash: str
     normalized_hash: str
     topic_tags: list[str]
+    source_document_url: str | None = None
+    extraction_status: str = "valid"
+    extraction_error: str | None = None
+    text_quality_score: int = 0
+    source_links: tuple[ParsedSourceLink, ...] = ()
 
 
 class _JudgmentHtmlParser(HTMLParser):
     def __init__(self):
         super().__init__()
         self.links: list[str] = []
+        self.link_entries: list[tuple[str, str]] = []
         self._parts: list[str] = []
         self._title_parts: list[str] = []
         self._in_title = False
         self._skip_depth = 0
+        self._link_href: str | None = None
+        self._link_parts: list[str] = []
 
     def handle_starttag(self, tag, attrs):
         attrs_dict = dict(attrs)
@@ -40,6 +54,8 @@ class _JudgmentHtmlParser(HTMLParser):
             href = attrs_dict.get("href")
             if href:
                 self.links.append(href)
+                self._link_href = href
+                self._link_parts = []
         if tag in {"p", "br", "div", "tr", "h1", "h2", "h3", "li"}:
             self._parts.append("\n")
 
@@ -48,6 +64,12 @@ class _JudgmentHtmlParser(HTMLParser):
             self._skip_depth -= 1
         if tag == "title":
             self._in_title = False
+        if tag == "a" and self._link_href:
+            self.link_entries.append(
+                (self._link_href, normalize_space(" ".join(self._link_parts)))
+            )
+            self._link_href = None
+            self._link_parts = []
         if tag in {"p", "div", "tr", "h1", "h2", "h3", "li"}:
             self._parts.append("\n")
 
@@ -56,6 +78,8 @@ class _JudgmentHtmlParser(HTMLParser):
             return
         if self._in_title:
             self._title_parts.append(data)
+        if self._link_href:
+            self._link_parts.append(data)
         self._parts.append(data)
 
     @property
@@ -101,6 +125,48 @@ def parse_case_html(html: str, url: str) -> ParsedCase:
         raw_hash=raw_hash,
         normalized_hash=normalized_hash,
         topic_tags=topic_tags_for(title=title, court=court, text=normalized_text[:5000]),
+        source_links=_source_links(parser, url),
+    )
+
+
+def parsed_case_from_source(
+    base: ParsedCase,
+    *,
+    text: str,
+    source_url: str,
+    source_format: str,
+    raw_content: bytes,
+    text_quality_score: int,
+) -> ParsedCase:
+    normalized_text = normalize_case_text(text)
+    title = _best_title(base.title, normalized_text)
+    citation = (
+        base.neutral_citation
+        or _extract_neutral_citation(title)
+        or _extract_neutral_citation(normalized_text)
+    )
+    court = base.court or _extract_labeled_value(
+        normalized_text, ("Court", "County", "Court Division")
+    )
+    date = base.judgment_date or _extract_date(normalized_text)
+    raw_hash = hashlib.sha256(raw_content).hexdigest()
+    normalized_hash = hashlib.sha256(normalized_text.encode("utf-8")).hexdigest()
+    return ParsedCase(
+        canonical_url=base.canonical_url,
+        title=title,
+        neutral_citation=citation,
+        court=court,
+        judgment_date=date,
+        text=normalized_text,
+        source_format=source_format,
+        raw_hash=raw_hash,
+        normalized_hash=normalized_hash,
+        topic_tags=topic_tags_for(title=title, court=court, text=normalized_text[:5000]),
+        source_document_url=source_url,
+        extraction_status="valid",
+        extraction_error=None,
+        text_quality_score=text_quality_score,
+        source_links=base.source_links,
     )
 
 
@@ -143,3 +209,17 @@ def _extract_labeled_value(text: str, labels: tuple[str, ...]) -> str | None:
         if match:
             return normalize_space(match.group(1))[:180]
     return None
+
+
+def _source_links(parser: _JudgmentHtmlParser, base_url: str) -> tuple[ParsedSourceLink, ...]:
+    links: list[ParsedSourceLink] = []
+    for href, label in parser.link_entries:
+        absolute = urljoin(base_url, href).split("#", 1)[0]
+        links.append(ParsedSourceLink(url=absolute, label=label))
+    return tuple(links)
+
+
+def _best_title(current_title: str, text: str) -> str:
+    if current_title and not current_title.lower().startswith("untitled"):
+        return current_title[:500]
+    return _extract_title("", text)
