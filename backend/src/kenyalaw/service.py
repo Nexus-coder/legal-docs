@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from collections.abc import AsyncIterator, Callable
 from urllib.parse import urlencode, urlparse, urlunparse, parse_qsl
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import SessionFactory
@@ -317,6 +317,86 @@ async def get_corpus_stats(db: AsyncSession) -> dict:
     }
 
 
+async def list_case_documents(
+    db: AsyncSession,
+    *,
+    query: str | None = None,
+    status: str | None = None,
+    court: str | None = None,
+    topic: str | None = None,
+    page: int = 1,
+    page_size: int = 20,
+) -> dict:
+    filters = _document_filters(
+        query=query,
+        status=status,
+        court=court,
+        topic=topic,
+    )
+    count_stmt = select(func.count()).select_from(CaseDocument)
+    if filters:
+        count_stmt = count_stmt.where(*filters)
+    total = await db.scalar(count_stmt)
+
+    stmt = (
+        select(CaseDocument, func.count(CaseChunk.id).label("chunk_count"))
+        .outerjoin(CaseChunk, CaseChunk.case_document_id == CaseDocument.id)
+        .group_by(CaseDocument.id)
+        .order_by(CaseDocument.last_seen_at.desc(), CaseDocument.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    if filters:
+        stmt = stmt.where(*filters)
+
+    rows = await db.execute(stmt)
+    documents = [
+        _document_payload(document, chunk_count=chunk_count or 0)
+        for document, chunk_count in rows.all()
+    ]
+    return {
+        "documents": documents,
+        "total": total or 0,
+        "page": page,
+        "page_size": page_size,
+    }
+
+
+async def get_case_document_detail(
+    db: AsyncSession, document_id: int
+) -> dict | None:
+    document = await db.get(CaseDocument, document_id)
+    if document is None:
+        return None
+
+    chunks_result = await db.execute(
+        select(CaseChunk)
+        .where(CaseChunk.case_document_id == document.id)
+        .order_by(CaseChunk.chunk_index)
+    )
+    chunks = list(chunks_result.scalars().all())
+    normalized_text = document.normalized_text or _text_from_chunks(chunks)
+    payload = _document_payload(document, chunk_count=len(chunks))
+    if not payload["text_length"]:
+        payload["text_length"] = len(normalized_text or "")
+    return {
+        **payload,
+        "normalized_text": normalized_text,
+        "chunks": [
+            {
+                "id": chunk.id,
+                "chunk_index": chunk.chunk_index,
+                "text": chunk.text,
+                "text_hash": chunk.text_hash,
+                "section_label": chunk.section_label,
+                "pinecone_vector_id": chunk.pinecone_vector_id,
+                "created_at": chunk.created_at,
+            }
+            for chunk in chunks
+        ],
+    }
+
+
 def get_pinecone_preflight_status() -> dict:
     try:
         result = validate_pinecone_index_dimension()
@@ -420,6 +500,73 @@ def _run_counts(run: IngestionRun) -> dict[str, int]:
         "skipped": run.skipped_count,
         "failed": run.failed_count,
     }
+
+
+def _document_filters(
+    *,
+    query: str | None,
+    status: str | None,
+    court: str | None,
+    topic: str | None,
+) -> list:
+    filters = []
+    if query:
+        like = f"%{query.strip()}%"
+        filters.append(
+            or_(
+                CaseDocument.title.ilike(like),
+                CaseDocument.neutral_citation.ilike(like),
+                CaseDocument.canonical_url.ilike(like),
+                CaseDocument.court.ilike(like),
+            )
+        )
+    if status:
+        filters.append(CaseDocument.fetch_status == status.strip())
+    if court:
+        filters.append(CaseDocument.court.ilike(f"%{court.strip()}%"))
+    if topic:
+        filters.append(CaseDocument.topic_tags.ilike(f"%{topic.strip()}%"))
+    return filters
+
+
+def _document_payload(document: CaseDocument, *, chunk_count: int) -> dict:
+    return {
+        "id": document.id,
+        "canonical_url": document.canonical_url,
+        "title": document.title,
+        "neutral_citation": document.neutral_citation,
+        "court": document.court,
+        "judgment_date": document.judgment_date,
+        "topic_tags": _topic_tags(document.topic_tags),
+        "source_format": document.source_format,
+        "fetch_status": document.fetch_status,
+        "indexed_at": document.indexed_at,
+        "stored_at": document.stored_at,
+        "last_seen_at": document.last_seen_at,
+        "created_at": document.created_at,
+        "updated_at": document.updated_at,
+        "text_length": document.text_length or 0,
+        "chunk_count": chunk_count,
+        "last_ingestion_run_id": document.last_ingestion_run_id,
+    }
+
+
+def _topic_tags(value: str | None) -> list[str]:
+    if not value:
+        return []
+    try:
+        tags = json.loads(value)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(tags, list):
+        return []
+    return [str(tag) for tag in tags if tag]
+
+
+def _text_from_chunks(chunks: list[CaseChunk]) -> str | None:
+    if not chunks:
+        return None
+    return "\n\n".join(chunk.text for chunk in chunks if chunk.text).strip() or None
 
 
 def _sse_payload(event: IngestionEvent) -> str:
@@ -574,6 +721,18 @@ async def _process_case_url(
         "Accepted ELC-relevant judgment.",
         url=parsed.canonical_url,
     )
+    document, already_indexed_current = await _upsert_case_document(
+        db, source, parsed, run_id=run.id
+    )
+    await _replace_chunks(db, document, parsed)
+    await _record_event(
+        db,
+        run,
+        "stored",
+        "store",
+        "Stored readable judgment text and searchable chunks.",
+        url=parsed.canonical_url,
+    )
     if dry_run:
         run.indexed_count += 1
         await _record_event(
@@ -586,8 +745,8 @@ async def _process_case_url(
         )
         return
 
-    document = await _upsert_case_document(db, source, parsed)
-    if document.indexed_at and document.normalized_hash == parsed.normalized_hash:
+    if already_indexed_current:
+        document.fetch_status = "indexed"
         run.skipped_count += 1
         await _record_event(
             db,
@@ -598,7 +757,6 @@ async def _process_case_url(
             url=parsed.canonical_url,
         )
         return
-    await _replace_chunks(db, document, parsed)
     await _record_event(
         db,
         run,
@@ -634,12 +792,17 @@ async def _process_case_url(
 
 
 async def _upsert_case_document(
-    db: AsyncSession, source: LegalSource, parsed: ParsedCase
-) -> CaseDocument:
+    db: AsyncSession, source: LegalSource, parsed: ParsedCase, *, run_id: int
+) -> tuple[CaseDocument, bool]:
     result = await db.execute(
         select(CaseDocument).where(CaseDocument.canonical_url == parsed.canonical_url)
     )
     document = result.scalar_one_or_none()
+    already_indexed_current = bool(
+        document
+        and document.indexed_at
+        and document.normalized_hash == parsed.normalized_hash
+    )
     if document is None:
         document = CaseDocument(source_id=source.id, canonical_url=parsed.canonical_url)
         db.add(document)
@@ -652,10 +815,14 @@ async def _upsert_case_document(
     document.source_format = parsed.source_format
     document.raw_hash = parsed.raw_hash
     document.normalized_hash = parsed.normalized_hash
-    document.fetch_status = "fetched"
+    document.normalized_text = parsed.text
+    document.text_length = len(parsed.text)
+    document.fetch_status = "stored"
+    document.stored_at = datetime.now(timezone.utc)
+    document.last_ingestion_run_id = run_id
     document.last_seen_at = datetime.now(timezone.utc)
     await db.flush()
-    return document
+    return document, already_indexed_current
 
 
 async def _replace_chunks(db: AsyncSession, document: CaseDocument, parsed: ParsedCase) -> None:

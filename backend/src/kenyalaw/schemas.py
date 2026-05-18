@@ -63,3 +63,45 @@ class CorpusStats(CustomBaseModel):
     failed_runs: int
     latest_run: IngestionRunRead | None = None
     preflight: PineconePreflightStatus | None = None
+
+
+class CaseChunkRead(CustomBaseModel):
+    id: int
+    chunk_index: int
+    text: str
+    text_hash: str
+    section_label: str | None = None
+    pinecone_vector_id: str | None = None
+    created_at: datetime
+
+
+class CaseDocumentSummary(CustomBaseModel):
+    id: int
+    canonical_url: str
+    title: str
+    neutral_citation: str | None = None
+    court: str | None = None
+    judgment_date: str | None = None
+    topic_tags: list[str] = []
+    source_format: str
+    fetch_status: str
+    indexed_at: datetime | None = None
+    stored_at: datetime | None = None
+    last_seen_at: datetime
+    created_at: datetime
+    updated_at: datetime
+    text_length: int
+    chunk_count: int
+    last_ingestion_run_id: int | None = None
+
+
+class CaseDocumentList(CustomBaseModel):
+    documents: list[CaseDocumentSummary]
+    total: int
+    page: int
+    page_size: int
+
+
+class CaseDocumentDetail(CaseDocumentSummary):
+    normalized_text: str | None = None
+    chunks: list[CaseChunkRead] = []

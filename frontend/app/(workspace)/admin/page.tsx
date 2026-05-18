@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { API_BASE_URL } from "@/lib/api";
 import { AdminSkeleton } from "./_components/AdminSkeleton";
+import { SourceLibrary } from "./_components/SourceLibrary";
 
 type IngestionRun = {
   id: number;
@@ -61,6 +62,7 @@ const steps = [
   { key: "discover", label: "Discover", icon: "fa-magnifying-glass" },
   { key: "fetch", label: "Fetch", icon: "fa-cloud-arrow-down" },
   { key: "filter", label: "Filter", icon: "fa-filter" },
+  { key: "store", label: "Store", icon: "fa-file-lines" },
   { key: "index", label: "Index", icon: "fa-database" },
   { key: "verify", label: "Verify", icon: "fa-circle-check" },
 ];
@@ -72,6 +74,7 @@ export default function AdminScreen() {
   const [stats, setStats] = useState<CorpusStats>(emptyStats);
   const [events, setEvents] = useState<IngestionEvent[]>([]);
   const [activeRun, setActiveRun] = useState<IngestionRun | null>(null);
+  const [activeView, setActiveView] = useState<"runs" | "library">("runs");
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
   const [connection, setConnection] = useState<"idle" | "connecting" | "live" | "reconnecting" | "closed">("idle");
@@ -212,6 +215,14 @@ export default function AdminScreen() {
               <MetricTile label="Failed runs" value={stats.failed_runs} accent={stats.failed_runs ? "red" : "green"} icon="fa-triangle-exclamation" />
             </div>
 
+            <div className="mb-5 inline-flex rounded-lg border border-slate-200 bg-white p-1 shadow-sm">
+              <ViewTab active={activeView === "runs"} icon="fa-terminal" label="Runs" onClick={() => setActiveView("runs")} />
+              <ViewTab active={activeView === "library"} icon="fa-folder-open" label="Source Library" onClick={() => setActiveView("library")} />
+            </div>
+
+            {activeView === "library" ? (
+              <SourceLibrary />
+            ) : (
             <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
               <main className="space-y-5">
                 <div className="ld-card overflow-hidden">
@@ -227,7 +238,7 @@ export default function AdminScreen() {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 border-b border-slate-200 bg-slate-50 sm:grid-cols-5">
+                  <div className="grid grid-cols-1 border-b border-slate-200 bg-slate-50 sm:grid-cols-6">
                     {steps.map((step) => {
                       const state = stepState(step.key, latestEvent, activeRun);
                       return (
@@ -328,6 +339,7 @@ export default function AdminScreen() {
                 </div>
               </aside>
             </div>
+            )}
           </>
         )}
       </div>
@@ -374,7 +386,7 @@ function stateClasses(state: string) {
 function statusClass(status: string) {
   if (status === "completed" || status === "passed") return "status-green";
   if (status === "failed") return "status-red";
-  if (status === "running" || status === "live") return "status-blue";
+  if (status === "running" || status === "live" || status === "stored" || status === "filtered") return "status-blue";
   if (status === "reconnecting" || status === "connecting") return "status-amber";
   return "status-slate";
 }
@@ -429,6 +441,29 @@ function Counter({ label, value, tone = "slate" }: { label: string; value: numbe
 
 function StatusPill({ status }: { status: string }) {
   return <span className={`status-badge ${statusClass(status)}`}>{status}</span>;
+}
+
+function ViewTab({
+  active,
+  icon,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  icon: string;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className={`flex items-center gap-2 rounded-md px-4 py-2 text-sm font-extrabold transition ${
+        active ? "bg-slate-950 text-white" : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"
+      }`}
+      onClick={onClick}
+    >
+      <i className={`fas ${icon}`} aria-hidden="true"></i> {label}
+    </button>
+  );
 }
 
 function ConnectionPill({ connection }: { connection: string }) {

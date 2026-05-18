@@ -137,12 +137,17 @@ authorities:
 |--------|------|-------------|
 | `POST` | `/api/admin/kenyalaw/ingestion-runs` | Discover, filter, fetch, and index Environment and Land Court judgments from Kenya Law |
 | `GET` | `/api/admin/kenyalaw/ingestion-runs/{run_id}` | Inspect ingestion status and counts |
+| `GET` | `/api/admin/kenyalaw/ingestion-runs/{run_id}/events` | Stream live ingestion events for the admin console |
 | `POST` | `/api/admin/kenyalaw/ingestion-runs/{run_id}/retry-failures` | Retry failed judgment URLs from an earlier run |
 | `GET` | `/api/admin/kenyalaw/corpus-stats` | Return indexed document, chunk, and failure counts |
+| `GET` | `/api/admin/kenyalaw/documents` | Search stored Kenya Law documents with status, topic, and pagination filters |
+| `GET` | `/api/admin/kenyalaw/documents/{document_id}` | Return readable document text, metadata, source URL, and stored chunks |
 
 The default start URL is `https://new.kenyalaw.org/judgments/KEELC/`. Ingestion
-keeps provenance metadata on every chunk so citation verification can return a
-source URL, court, citation, date, confidence breakdown, and bounded snippet.
+stores readable normalized text and keeps provenance metadata on every chunk so
+citation verification can return a source URL, court, citation, date, confidence
+breakdown, and bounded snippet. Dry-runs store accepted documents for review but
+skip vector upload.
 
 ### Matter Workflow States
 

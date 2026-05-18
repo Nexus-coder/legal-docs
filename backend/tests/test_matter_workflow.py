@@ -308,7 +308,23 @@ class MatterWorkflowTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(run.indexed_count, 1)
 
             documents = await db.execute(select(CaseDocument))
-            self.assertEqual(len(documents.scalars().all()), 0)
+            document_list = documents.scalars().all()
+            self.assertEqual(len(document_list), 1)
+            document = document_list[0]
+            self.assertEqual(document.fetch_status, "stored")
+            self.assertEqual(document.last_ingestion_run_id, run.id)
+            self.assertIn("injunction over land parcel", document.normalized_text)
+
+            listed = await kenyalaw_service.list_case_documents(db, query="Mwangi")
+            self.assertEqual(listed["total"], 1)
+            self.assertEqual(listed["documents"][0]["chunk_count"], 1)
+            self.assertIn("injunction", listed["documents"][0]["topic_tags"])
+
+            detail = await kenyalaw_service.get_case_document_detail(db, document.id)
+            self.assertIsNotNone(detail)
+            self.assertEqual(detail["id"], document.id)
+            self.assertIn("Mwangi v Kamau", detail["title"])
+            self.assertEqual(len(detail["chunks"]), 1)
 
     async def test_preflight_failure_records_readable_event(self):
         def failing_preflight():

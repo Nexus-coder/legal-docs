@@ -41,8 +41,14 @@ class CaseDocument(Base):
     source_format: Mapped[str] = mapped_column(String(30), default="html")
     raw_hash: Mapped[str | None] = mapped_column(String(64), index=True)
     normalized_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+    normalized_text: Mapped[str | None] = mapped_column(Text)
+    text_length: Mapped[int] = mapped_column(Integer, default=0)
     fetch_status: Mapped[str] = mapped_column(String(40), default="discovered", index=True)
     indexed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    stored_at: Mapped[datetime | None] = mapped_column(DateTime)
+    last_ingestion_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ingestion_run.id"), index=True
+    )
     last_seen_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc), index=True
     )
