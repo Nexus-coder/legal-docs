@@ -12,7 +12,11 @@ from src.models import Base
 from src.matters.schemas import MatterCreate, MatterRead
 from src.matters import service
 from src.drafting.router import _classify_drafting_error, _drafting_status_from_state
-from src.ingestion.indexer import PineconeDimensionMismatch, validate_pinecone_index_dimension
+from src.ingestion.indexer import (
+    PineconeDimensionMismatch,
+    embedding_safe_nodes,
+    validate_pinecone_index_dimension,
+)
 from src.kenyalaw.extraction import (
     REJECTED_SHELL_TEXT,
     VALID_EXTRACTION,
@@ -365,6 +369,7 @@ class MatterWorkflowTests(unittest.IsolatedAsyncioTestCase):
         <body>
           <a href="/akn/ke/judgment/keelc/2024/10/download.docx">Download DOCX</a>
           <a href="/akn/ke/judgment/keelc/2024/10/source.pdf">Download PDF</a>
+          <button data-url="/media/judgment/ruling.doc">Load document</button>
           <button>Load document</button>
         </body></html>
         """
@@ -379,6 +384,7 @@ class MatterWorkflowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(candidates[1].source_format, "pdf")
         self.assertIn("download.docx", [candidate.url for candidate in candidates][2])
+        self.assertTrue(any(candidate.url.endswith("/media/judgment/ruling.doc") for candidate in candidates))
 
     def test_quality_gate_rejects_shell_text_and_accepts_judgment_body(self):
         shell = """
@@ -442,6 +448,23 @@ class MatterWorkflowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("permanent injunction over land parcel LR 1", zipped_text)
 
+    def test_html_body_can_be_used_when_source_documents_are_missing(self):
+        html = f"""
+        <html><head><title>Mwangi v Kamau [2024] KEELC 10 (KLR)</title></head>
+        <body>
+          <p>Court: Environment and Land Court at Nairobi</p>
+          <article>{realistic_judgment_text()}</article>
+        </body></html>
+        """
+        parsed = parse_case_html(
+            html,
+            "https://new.kenyalaw.org/akn/ke/judgment/keelc/2024/10/",
+        )
+        extracted = extract_judgment_source(FakeKenyaLawFetcher({}), parsed)
+        self.assertEqual(extracted.source_format, "html")
+        self.assertEqual(extracted.url, parsed.canonical_url)
+        self.assertIn("permanent injunction over land parcel LR 1", extracted.text)
+
     def test_pinecone_preflight_detects_dimension_mismatch(self):
         result = validate_pinecone_index_dimension(
             index_dimension_provider=lambda: 1536,
@@ -456,6 +479,29 @@ class MatterWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             str(mismatch.exception),
             "Pinecone index dimension 3072 does not match embedding dimension 1536",
+        )
+
+    def test_indexer_splits_long_judgments_before_embedding(self):
+        long_text = "\n\n".join(
+            [
+                "# Long Kenya Law judgment",
+                "source: Kenya Law",
+                "canonical_url: https://new.kenyalaw.org/akn/ke/judgment/keelc/2026/2845",
+                ("The plaintiff seeks orders over land parcel LR 1. " * 1200),
+                ("The court considered evidence, submissions, costs, and final orders. " * 1200),
+            ]
+        )
+        nodes = embedding_safe_nodes(
+            long_text,
+            {
+                "source": "Kenya Law",
+                "canonical_url": "https://new.kenyalaw.org/akn/ke/judgment/keelc/2026/2845",
+            },
+        )
+        self.assertGreater(len(nodes), 1)
+        self.assertTrue(
+            all(len(node.get_content().split()) < 2500 for node in nodes),
+            "Indexer produced a node that is too large for embedding.",
         )
 
     async def test_dry_run_elc_ingestion_discovers_filters_and_counts(self):

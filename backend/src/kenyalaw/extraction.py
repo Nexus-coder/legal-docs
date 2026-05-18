@@ -140,6 +140,21 @@ def extract_judgment_source(fetcher, parsed: ParsedCase) -> SourceExtractionResu
         rejected_format = source_format
         errors.append(f"{fetched.url}: {quality.status}: {quality.message}")
 
+    html_quality = assess_judgment_text_quality(
+        parsed.text,
+        title=parsed.title,
+        court=parsed.court,
+        citation=parsed.neutral_citation,
+    )
+    if html_quality.status == VALID_EXTRACTION:
+        return SourceExtractionResult(
+            url=parsed.canonical_url,
+            source_format="html",
+            text=normalize_case_text(parsed.text),
+            raw_content=parsed.text.encode("utf-8"),
+            quality=html_quality,
+        )
+
     if fetch_errors and len(fetch_errors) == len(candidates) and all(
         exc.error_type == "http_404" for exc in fetch_errors
     ):

@@ -50,6 +50,10 @@ class _JudgmentHtmlParser(HTMLParser):
             self._skip_depth += 1
         if tag == "title":
             self._in_title = True
+        for attr_name, attr_value in attrs:
+            if attr_name != "href" and attr_value and _looks_like_source_url(attr_value):
+                self.links.append(attr_value)
+                self.link_entries.append((attr_value, attr_name))
         if tag == "a":
             href = attrs_dict.get("href")
             if href:
@@ -217,6 +221,18 @@ def _source_links(parser: _JudgmentHtmlParser, base_url: str) -> tuple[ParsedSou
         absolute = urljoin(base_url, href).split("#", 1)[0]
         links.append(ParsedSourceLink(url=absolute, label=label))
     return tuple(links)
+
+
+def _looks_like_source_url(value: str) -> bool:
+    lowered = value.lower()
+    return (
+        "source" in lowered
+        or "download" in lowered
+        or ".doc" in lowered
+        or ".docx" in lowered
+        or ".pdf" in lowered
+        or "kenyalaw-website-media" in lowered
+    )
 
 
 def _best_title(current_title: str, text: str) -> str:

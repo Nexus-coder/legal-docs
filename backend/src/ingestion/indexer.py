@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List
 from llama_index.core import Document, VectorStoreIndex, StorageContext, Settings
 from llama_index.vector_stores.pinecone import PineconeVectorStore
-from llama_index.core.node_parser import MarkdownNodeParser
+from llama_index.core.node_parser import TokenTextSplitter
 from llama_index.embeddings.openai import OpenAIEmbedding
 from pinecone import Pinecone
 from src.config import settings
@@ -12,6 +12,8 @@ EMBEDDING_DIMENSIONS = {
     "text-embedding-3-large": 3072,
     "text-embedding-ada-002": 1536,
 }
+EMBEDDING_CHUNK_TOKENS = 1800
+EMBEDDING_CHUNK_OVERLAP = 150
 
 
 @dataclass(frozen=True)
@@ -125,15 +127,27 @@ def index_markdown(text: str, source_metadata: dict, namespace: str | None = Non
     vector_store = PineconeVectorStore(**vector_store_kwargs)
     storage_context = StorageContext.from_defaults(vector_store=vector_store)
 
-    # Robust MD parsing handles nested headers preserving context
-    parser = MarkdownNodeParser()
-    doc = Document(text=text, metadata=source_metadata)
-    nodes = parser.get_nodes_from_documents([doc])
+    nodes = embedding_safe_nodes(text, source_metadata)
 
     # Generating embeddings and inserting into Pinecone
     VectorStoreIndex(nodes, storage_context=storage_context)
 
     return len(nodes)
+
+
+def embedding_safe_nodes(text: str, source_metadata: dict) -> list:
+    """
+    Split source text before embedding so no single node approaches the model limit.
+
+    OpenAI embedding models reject inputs above 8192 tokens. Kenya Law judgments can
+    contain very long paragraphs, so Markdown-only splitting is not enough.
+    """
+    splitter = TokenTextSplitter(
+        chunk_size=EMBEDDING_CHUNK_TOKENS,
+        chunk_overlap=EMBEDDING_CHUNK_OVERLAP,
+    )
+    doc = Document(text=text, metadata=source_metadata)
+    return splitter.get_nodes_from_documents([doc])
 
 
 def delete_document_vectors(canonical_url: str, namespace: str | None = None) -> None:
