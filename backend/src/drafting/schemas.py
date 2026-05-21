@@ -1,4 +1,8 @@
+from datetime import datetime
 from typing import List
+
+from pydantic import ConfigDict
+
 from src.models import CustomBaseModel
 from src.matters.schemas import DraftDocumentRead
 
@@ -24,6 +28,33 @@ class DraftingResponse(CustomBaseModel):
     error_status: str | None = None
     documents: List[DraftDocumentRead] = []
     blocks: List[GeneratedBlock]
+
+
+class DraftingRunRead(CustomBaseModel):
+    id: int
+    matter_id: int
+    user_id: int
+    status: str
+    jurisdiction: str | None = None
+    subcategory: str | None = None
+    error_status: str | None = None
+    started_at: datetime
+    finished_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DraftingEventRead(CustomBaseModel):
+    id: int
+    drafting_run_id: int
+    event_type: str
+    stage: str
+    message: str
+    document_type: str | None = None
+    error_type: str | None = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class CitationResponse(CustomBaseModel):

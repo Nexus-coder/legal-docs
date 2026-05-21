@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { API_BASE_URL } from "@/lib/api";
@@ -45,6 +45,24 @@ type Matter = {
   activities: { id: number; title: string; detail?: string | null; created_at: string }[];
 };
 
+type DraftingRun = {
+  id: number;
+  matter_id: number;
+  status: "running" | "completed" | "failed" | string;
+  error_status?: string | null;
+};
+
+type DraftingEvent = {
+  id: number;
+  drafting_run_id: number;
+  event_type: string;
+  stage: string;
+  message: string;
+  document_type?: string | null;
+  error_type?: string | null;
+  created_at: string;
+};
+
 type PacketDocument = {
   document_type: string;
   title: string;
@@ -54,6 +72,7 @@ type PacketDocument = {
 
 type ActivityState = "pending" | "active" | "complete" | "error";
 type MobilePanel = "control" | "draft" | "review";
+type ConnectionState = "idle" | "connecting" | "live" | "reconnecting" | "completed" | "failed";
 
 const PACKET_DOCUMENTS: PacketDocument[] = [
   {
@@ -89,20 +108,37 @@ const PACKET_DOCUMENTS: PacketDocument[] = [
 ];
 
 const GENERATION_STEPS = [
-  "Thinking through document structure",
-  "Reading masked matter facts",
+  "Reading masked facts",
   "Searching Kenyan authorities",
-  "Generating Notice of Motion",
-  "Generating Supporting Affidavit",
-  "Checking draft against review rules",
+  "Drafting Notice of Motion",
+  "Drafting Supporting Affidavit",
+  "Running critique",
   "Ready for advocate review",
 ];
+
+const terminalEvents = new Set(["completed", "failed"]);
 
 function tokenFromCookie() {
   return document.cookie
     .split("; ")
     .find((row) => row.startsWith("token="))
     ?.split("=")[1];
+}
+
+function placeholderMatter(matterId: string): Matter {
+  return {
+    id: Number(matterId) || 0,
+    case_number: `Matter #${matterId}`,
+    division: "Environment and Land Court",
+    jurisdiction: "Environment and Land Court",
+    subcategory: "Temporary Injunction",
+    workflow_state: "loading",
+    draft_documents: [],
+    verification_done: 0,
+    verification_total: 0,
+    citation_evidence: [],
+    activities: [],
+  };
 }
 
 function getStatusVariant(status?: string | null): "blue" | "green" | "amber" | "red" | "slate" {
@@ -120,36 +156,77 @@ function statusLabel(status?: string | null, enabled = true) {
 }
 
 function workflowLabel(state: string) {
+  if (state === "loading") return "loading matter";
   return state.replaceAll("_", " ");
+}
+
+function connectionLabel(connection: ConnectionState, loading: boolean) {
+  if (loading) return "connecting";
+  if (connection === "completed") return "completed";
+  if (connection === "failed") return "failed";
+  if (connection === "reconnecting") return "reconnecting";
+  if (connection === "live") return "live";
+  if (connection === "connecting") return "connecting";
+  return "idle";
+}
+
+function connectionClass(connection: ConnectionState, loading: boolean) {
+  const label = connectionLabel(connection, loading);
+  if (label === "completed") return "status-green";
+  if (label === "failed") return "status-red";
+  if (label === "live") return "status-blue";
+  if (label === "connecting" || label === "reconnecting") return "status-amber";
+  return "status-slate";
+}
+
+function activeStepFromEvents(events: DraftingEvent[], hasDocuments: boolean, connection: ConnectionState, loading: boolean) {
+  if (loading) return 0;
+  if (connection === "completed") return GENERATION_STEPS.length - 1;
+  const latest = events.at(-1);
+  if (!latest) return hasDocuments && connection === "idle" ? GENERATION_STEPS.length - 1 : 0;
+  if (latest.event_type === "failed") return stageIndex(latest.stage);
+  if (latest.event_type === "completed") return GENERATION_STEPS.length - 1;
+  if (hasDocuments && connection === "idle") return GENERATION_STEPS.length - 1;
+  return stageIndex(latest.stage);
+}
+
+function stageIndex(stage: string) {
+  if (stage === "read_facts" || stage === "start") return 0;
+  if (stage === "authorities") return 1;
+  if (stage === "injunction_motion") return 2;
+  if (stage === "supporting_affidavit") return 3;
+  if (stage === "critique") return 4;
+  if (stage === "completed") return 5;
+  return 0;
 }
 
 function generationStepState({
   index,
-  generating,
   activeStep,
+  isDrafting,
   hasDocuments,
   hasError,
 }: {
   index: number;
-  generating: boolean;
   activeStep: number;
+  isDrafting: boolean;
   hasDocuments: boolean;
   hasError: boolean;
 }): ActivityState {
   if (hasError && index === activeStep) return "error";
-  if (generating) {
+  if (hasDocuments && !isDrafting) return "complete";
+  if (isDrafting) {
     if (index < activeStep) return "complete";
     if (index === activeStep) return "active";
     return "pending";
   }
-  if (hasDocuments) return "complete";
   return index === 0 ? "active" : "pending";
 }
 
 function activityIcon(state: ActivityState, index: number) {
-  if (state === "complete") return "✓";
+  if (state === "complete") return "ok";
   if (state === "error") return "!";
-  return state === "active" ? "•" : String(index + 1);
+  return state === "active" ? "..." : String(index + 1);
 }
 
 function buildFallbackMotion(matter: Matter) {
@@ -175,9 +252,16 @@ function DraftingWorkspaceContent() {
   const [verifying, setVerifying] = useState(false);
   const [selectedEvidence, setSelectedEvidence] = useState<Evidence | null>(null);
   const [activeDocumentType, setActiveDocumentType] = useState("injunction_motion");
-  const [activeGenerationStep, setActiveGenerationStep] = useState(0);
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>("draft");
   const [error, setError] = useState<string | null>(null);
+  const [activeRun, setActiveRun] = useState<DraftingRun | null>(null);
+  const [events, setEvents] = useState<DraftingEvent[]>([]);
+  const [connection, setConnection] = useState<ConnectionState>("idle");
+  const eventSourceRef = useRef<EventSource | null>(null);
+  const streamRunIdRef = useRef<number | null>(null);
+  const terminalEventSeenRef = useRef(false);
+  const autoStartedMatterRef = useRef<number | null>(null);
+  const matterRef = useRef<Matter | null>(null);
 
   const authHeaders = useMemo<Record<string, string>>(() => {
     const headers: Record<string, string> = {};
@@ -186,14 +270,99 @@ function DraftingWorkspaceContent() {
     return headers;
   }, []);
 
+  const closeStream = useCallback(() => {
+    eventSourceRef.current?.close();
+    eventSourceRef.current = null;
+    streamRunIdRef.current = null;
+  }, []);
+
   useEffect(() => {
-    if (!generating) return;
-    setActiveGenerationStep(0);
-    const interval = window.setInterval(() => {
-      setActiveGenerationStep((step) => Math.min(step + 1, GENERATION_STEPS.length - 2));
-    }, 1400);
-    return () => window.clearInterval(interval);
-  }, [generating]);
+    matterRef.current = matter;
+  }, [matter]);
+
+  const refreshMatter = useCallback(async () => {
+    if (!matterId) return;
+    const res = await fetch(`${API_BASE_URL}matters/${matterId}`, {
+      headers: authHeaders,
+      credentials: "include",
+    });
+    if (res.ok) {
+      const data: Matter = await res.json();
+      setMatter(data);
+    }
+  }, [authHeaders, matterId]);
+
+  const connectToRun = useCallback((runId: number) => {
+    if (eventSourceRef.current && streamRunIdRef.current === runId) return;
+    closeStream();
+    setConnection("connecting");
+    streamRunIdRef.current = runId;
+    terminalEventSeenRef.current = false;
+    const source = new EventSource(`${API_BASE_URL}drafting/runs/${runId}/events`, {
+      withCredentials: true,
+    });
+    eventSourceRef.current = source;
+
+    source.onopen = () => setConnection("live");
+    source.onmessage = (message) => {
+      const event = JSON.parse(message.data) as DraftingEvent;
+      setEvents((current) => {
+        const withoutDuplicate = current.filter((item) => item.id !== event.id);
+        return [...withoutDuplicate, event].sort((a, b) => a.id - b.id);
+      });
+      if (event.event_type === "document_ready") {
+        void refreshMatter();
+      }
+      if (terminalEvents.has(event.event_type)) {
+        terminalEventSeenRef.current = true;
+        setConnection(event.event_type === "completed" ? "completed" : "failed");
+        setGenerating(false);
+        if (event.error_type) setError(readableDraftingError(event.error_type));
+        closeStream();
+        void refreshMatter();
+      }
+    };
+    source.onerror = () => {
+      if (source.readyState === EventSource.CLOSED) {
+        setGenerating(false);
+        if (!terminalEventSeenRef.current) {
+          setConnection("failed");
+          setError("Live drafting connection closed before the run completed. Retry the run.");
+        }
+        return;
+      }
+      setConnection("reconnecting");
+    };
+  }, [closeStream, refreshMatter]);
+
+  const startDrafting = useCallback(async (sourceMatter?: Matter | null) => {
+    const targetMatter = sourceMatter ?? matterRef.current;
+    if (!targetMatter || targetMatter.workflow_state === "loading") return;
+    setGenerating(true);
+    setError(null);
+    setEvents([]);
+    setConnection("connecting");
+    try {
+      const res = await fetch(`${API_BASE_URL}drafting/runs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders },
+        credentials: "include",
+        body: JSON.stringify({
+          matter_id: targetMatter.id,
+          jurisdiction: targetMatter.jurisdiction || targetMatter.division,
+          subcategory: targetMatter.subcategory || "Temporary Injunction",
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Draft generation failed");
+      setActiveRun(data);
+      connectToRun(data.id);
+    } catch (err) {
+      setConnection("failed");
+      setGenerating(false);
+      setError(err instanceof Error ? err.message : "Draft generation failed");
+    }
+  }, [authHeaders, connectToRun]);
 
   useEffect(() => {
     const load = async () => {
@@ -201,9 +370,12 @@ function DraftingWorkspaceContent() {
         setLoading(false);
         return;
       }
+      setLoading(true);
+      setError(null);
       try {
         const res = await fetch(`${API_BASE_URL}matters/${matterId}`, {
           headers: authHeaders,
+          credentials: "include",
         });
         if (!res.ok) throw new Error("Matter not found");
         const data: Matter = await res.json();
@@ -211,9 +383,11 @@ function DraftingWorkspaceContent() {
         if (
           data.workflow_state === "pii_masked" &&
           !(data.draft_documents || []).length &&
-          !data.draft_content
+          !data.draft_content &&
+          autoStartedMatterRef.current !== data.id
         ) {
-          await generateDraft(data);
+          autoStartedMatterRef.current = data.id;
+          void startDrafting(data);
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Could not load matter");
@@ -221,48 +395,9 @@ function DraftingWorkspaceContent() {
         setLoading(false);
       }
     };
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [matterId]);
-
-  const refreshMatter = async () => {
-    if (!matterId) return;
-    const res = await fetch(`${API_BASE_URL}matters/${matterId}`, { headers: authHeaders });
-    if (res.ok) {
-      const data: Matter = await res.json();
-      setMatter(data);
-      setActiveGenerationStep(GENERATION_STEPS.length - 1);
-    }
-  };
-
-  const generateDraft = async (sourceMatter = matter) => {
-    if (!sourceMatter) return;
-    setGenerating(true);
-    setError(null);
-    try {
-      const res = await fetch(`${API_BASE_URL}drafting/generate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders },
-        body: JSON.stringify({
-          matter_id: sourceMatter.id,
-          jurisdiction: sourceMatter.jurisdiction || sourceMatter.division,
-          subcategory: sourceMatter.subcategory || "Temporary Injunction",
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok || (data.error_status && !data.documents?.length && !data.blocks?.length)) {
-        throw new Error(data.error_status || data.detail || "Draft generation failed");
-      }
-      if (data.error_status) {
-        setError("Draft generated, but the critique loop reached its revision limit. Review the draft manually before relying on it.");
-      }
-      await refreshMatter();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Draft generation failed");
-    } finally {
-      setGenerating(false);
-    }
-  };
+    void load();
+    return closeStream;
+  }, [authHeaders, closeStream, matterId, startDrafting]);
 
   const verifyCitations = async () => {
     if (!matter) return;
@@ -272,6 +407,7 @@ function DraftingWorkspaceContent() {
       const res = await fetch(`${API_BASE_URL}matters/${matter.id}/verify-citations`, {
         method: "POST",
         headers: authHeaders,
+        credentials: "include",
       });
       if (!res.ok) throw new Error("Citation verification failed");
       const data = await res.json();
@@ -297,29 +433,36 @@ function DraftingWorkspaceContent() {
     );
   }
 
-  if (loading) return <section className="p-8 text-sm text-slate-500">Loading drafting workspace...</section>;
-  if (!matter) return <section className="p-8 text-sm text-red-600">{error || "Matter unavailable"}</section>;
-
-  const documents = matter.draft_documents || [];
+  const displayMatter = matter ?? placeholderMatter(matterId);
+  const documents = displayMatter.draft_documents || [];
   const activeDocument = documents.find((document) => document.document_type === activeDocumentType);
   const activePacketItem = PACKET_DOCUMENTS.find((document) => document.document_type === activeDocumentType);
   const hasDocuments = documents.some((document) => document.content);
-  const hasGenerationError = Boolean(error && !hasDocuments);
-  const progress = matter.verification_total
-    ? Math.round((matter.verification_done / matter.verification_total) * 100)
+  const isDrafting = loading || generating || connection === "connecting" || connection === "live" || connection === "reconnecting";
+  const activeGenerationStep = activeStepFromEvents(events, hasDocuments, connection, loading);
+  const hasGenerationError = connection === "failed" || Boolean(error && !hasDocuments && !loading);
+  const progress = displayMatter.verification_total
+    ? Math.round((displayMatter.verification_done / displayMatter.verification_total) * 100)
     : 0;
   const activeContent = activeDocument?.content || "";
+  const latestEvent = events.at(-1);
+  const runLabel = activeRun ? `Run #${activeRun.id}` : "No active run";
 
   return (
     <section className="drafting-shell" data-mobile-panel={mobilePanel}>
       <header className="drafting-topbar">
         <div>
-          <div className="drafting-breadcrumbs">Matters / {matter.case_number} / Drafting</div>
+          <div className="drafting-breadcrumbs">Matters / {displayMatter.case_number} / Drafting</div>
           <h1 className="drafting-title">Temporary injunction drafting desk</h1>
         </div>
-        <div className="matter-pill">
-          <span className="matter-pill-dot"></span>
-          {matter.case_number} · {workflowLabel(matter.workflow_state)}
+        <div className="topbar-status-group">
+          <span className={`status-badge ${connectionClass(connection, loading)}`}>
+            {connectionLabel(connection, loading)}
+          </span>
+          <div className="matter-pill">
+            <span className="matter-pill-dot"></span>
+            {displayMatter.case_number} / {workflowLabel(displayMatter.workflow_state)}
+          </div>
         </div>
       </header>
 
@@ -341,10 +484,10 @@ function DraftingWorkspaceContent() {
           <div className="drafting-rail-section">
             <CardLabel className="mb-4">Matter</CardLabel>
             <div className="summary-grid">
-              <div className="summary-row"><span>Case</span><strong className="mono-text">{matter.case_number}</strong></div>
-              <div className="summary-row"><span>Court</span><strong>{matter.jurisdiction || matter.division}</strong></div>
-              <div className="summary-row"><span>Issue</span><strong>{matter.subcategory || "Injunction pending land suit"}</strong></div>
-              <div className="summary-row"><span>Privacy</span><Badge variant="green">PII masked</Badge></div>
+              <div className="summary-row"><span>Case</span><strong className="mono-text">{displayMatter.case_number}</strong></div>
+              <div className="summary-row"><span>Court</span><strong>{displayMatter.jurisdiction || displayMatter.division}</strong></div>
+              <div className="summary-row"><span>Issue</span><strong>{displayMatter.subcategory || "Injunction pending land suit"}</strong></div>
+              <div className="summary-row"><span>Privacy</span><Badge variant={loading ? "slate" : "green"}>{loading ? "Loading" : "PII masked"}</Badge></div>
             </div>
           </div>
 
@@ -377,20 +520,28 @@ function DraftingWorkspaceContent() {
           </div>
 
           <div className="drafting-rail-section">
-            <CardLabel className="mb-4">Generation activity</CardLabel>
-            <div className="activity-stack" aria-live="polite">
+            <div className="rail-heading-row">
+              <CardLabel>Generation activity</CardLabel>
+              <span className="mono-text text-slate-400">{runLabel}</span>
+            </div>
+            <div className="activity-stack mt-4" aria-live="polite">
               {GENERATION_STEPS.map((step, index) => {
                 const state = generationStepState({
                   index,
-                  generating,
                   activeStep: activeGenerationStep,
+                  isDrafting,
                   hasDocuments,
                   hasError: hasGenerationError,
                 });
                 return (
                   <div key={step} className={`activity-step ${state}`}>
                     <span className="activity-icon">{activityIcon(state, index)}</span>
-                    <span className="font-medium">{step}</span>
+                    <span>
+                      <span className="font-medium">{step}</span>
+                      {index === activeGenerationStep && latestEvent?.message ? (
+                        <span className="activity-detail">{latestEvent.message}</span>
+                      ) : null}
+                    </span>
                   </div>
                 );
               })}
@@ -400,7 +551,7 @@ function DraftingWorkspaceContent() {
           <div className="drafting-rail-section">
             <CardLabel className="mb-4">Activity timeline</CardLabel>
             <div className="space-y-3">
-              {matter.activities.length ? matter.activities.map((activity) => (
+              {displayMatter.activities.length ? displayMatter.activities.map((activity) => (
                 <div key={activity.id} className="border-l-2 border-slate-200 pl-3">
                   <p className="text-xs font-bold text-slate-700">{activity.title}</p>
                   {activity.detail && <p className="text-[11px] text-slate-500">{activity.detail}</p>}
@@ -414,8 +565,11 @@ function DraftingWorkspaceContent() {
 
         <section className="document-canvas-wrap" aria-label="Document canvas">
           {error && (
-            <div className="mx-auto mb-4 max-w-[840px] rounded-lg border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700">
-              {error}
+            <div className="drafting-error-banner">
+              <span>{error}</span>
+              <Button variant="secondary" size="sm" onClick={() => startDrafting()} disabled={!matter || generating}>
+                Retry
+              </Button>
             </div>
           )}
           <div className="document-toolbar">
@@ -424,10 +578,10 @@ function DraftingWorkspaceContent() {
               <h2 className="text-xl font-bold text-slate-900">{activeDocument?.title || activePacketItem?.title || "Draft document"}</h2>
             </div>
             <div className="toolbar-actions">
-              <Button variant="secondary" size="sm" disabled={!activeContent}>
+              <Button variant="secondary" size="sm" disabled={!activeContent} onClick={() => navigator.clipboard?.writeText(activeContent)}>
                 Copy text
               </Button>
-              <Button variant="secondary" size="sm" onClick={() => generateDraft()} loading={generating}>
+              <Button variant="secondary" size="sm" onClick={() => startDrafting()} loading={generating} disabled={!matter || loading}>
                 Regenerate
               </Button>
               <Button variant="locked" size="sm">
@@ -439,8 +593,8 @@ function DraftingWorkspaceContent() {
           <article className="document-paper">
             <div className="paper-meta">
               <strong>REPUBLIC OF KENYA</strong>
-              <span>IN THE {matter.jurisdiction || matter.division}</span>
-              <span className="mono-text">{matter.case_number}</span>
+              <span>IN THE {displayMatter.jurisdiction || displayMatter.division}</span>
+              <span className="mono-text">{displayMatter.case_number}</span>
             </div>
             <div className="document-divider-title">
               {activeDocument?.title || activePacketItem?.title || "Draft document"}
@@ -450,14 +604,16 @@ function DraftingWorkspaceContent() {
             ) : (
               <div className="draft-empty">
                 <div className="draft-empty-inner">
-                  <h3 className="text-xl font-bold text-slate-900 mb-2">{generating ? "Drafting in progress" : "No draft generated yet"}</h3>
+                  <h3 className="text-xl font-bold text-slate-900 mb-2">
+                    {isDrafting ? "Drafting in progress" : "No draft generated yet"}
+                  </h3>
                   <p className="text-slate-500 mb-6">
-                    {generating
-                      ? "LegalDocs is preparing the motion and affidavit from masked matter facts."
+                    {isDrafting
+                      ? "The desk is preparing the motion and affidavit from masked matter facts."
                       : "Generate the injunction packet to create the Notice of Motion and Supporting Affidavit."}
                   </p>
-                  {!generating && (
-                    <Button onClick={() => generateDraft()} size="lg">
+                  {!isDrafting && (
+                    <Button onClick={() => startDrafting()} size="lg" disabled={!matter}>
                       Generate Motion + Affidavit
                     </Button>
                   )}
@@ -465,7 +621,7 @@ function DraftingWorkspaceContent() {
               </div>
             )}
             {!activeContent && hasDocuments && activeDocumentType === "injunction_motion" && (
-              <div className="draft-copy mt-6 text-slate-500">{buildFallbackMotion(matter)}</div>
+              <div className="draft-copy mt-6 text-slate-500">{buildFallbackMotion(displayMatter)}</div>
             )}
           </article>
         </section>
@@ -475,7 +631,7 @@ function DraftingWorkspaceContent() {
             <CardLabel className="mb-4">Verification</CardLabel>
             <div className="progress-block">
               <div className="progress-top mb-1">
-                <strong className="text-sm">{matter.verification_done} of {matter.verification_total} authorities reviewed</strong>
+                <strong className="text-sm">{displayMatter.verification_done} of {displayMatter.verification_total} authorities reviewed</strong>
                 <span className="mono-text text-xs">{progress}%</span>
               </div>
               <div className="progress-track mb-3">
@@ -490,7 +646,7 @@ function DraftingWorkspaceContent() {
           <div className="review-card">
             <CardLabel className="mb-4">Citation evidence</CardLabel>
             <div className="evidence-list">
-              {matter.citation_evidence.length ? matter.citation_evidence.map((item) => (
+              {displayMatter.citation_evidence.length ? displayMatter.citation_evidence.map((item) => (
                 <button key={item.id} type="button" onClick={() => setSelectedEvidence(item)} className="evidence-item hover:border-brand-blue hover:bg-brand-blue/5 transition-all">
                   <span className="evidence-kicker">
                     <span className="text-brand-blue">{item.citation_type}</span>
@@ -525,7 +681,7 @@ function DraftingWorkspaceContent() {
           <div className="review-card border-none">
             <Button
               onClick={verifyCitations}
-              disabled={verifying || !matter.citation_evidence.length}
+              disabled={verifying || !displayMatter.citation_evidence.length || !matter}
               loading={verifying}
               className="w-full"
             >
@@ -547,20 +703,20 @@ function DraftingWorkspaceContent() {
                 <i className="fas fa-times"></i>
               </Button>
             </div>
-            
+
             <div className="space-y-8">
               <div>
                 <CardLabel className="mb-2">Source</CardLabel>
                 <p className="text-sm font-medium text-slate-700">{selectedEvidence.source || "Internal legal corpus"}</p>
               </div>
-              
+
               <div>
                 <CardLabel className="mb-3">Evidence snippet</CardLabel>
                 <div className="rounded-xl bg-slate-50 border border-slate-100 p-5 text-sm leading-relaxed text-slate-700 font-serif">
                   &quot;{selectedEvidence.snippet}&quot;
                 </div>
               </div>
-              
+
               <div className="pt-4">
                 <Button className="w-full">Open full precedent</Button>
               </div>
@@ -572,9 +728,89 @@ function DraftingWorkspaceContent() {
   );
 }
 
+function readableDraftingError(errorStatus: string) {
+  const labels: Record<string, string> = {
+    empty_context: "No masked matter facts were available for drafting.",
+    retrieval_failed: "Kenyan authority retrieval failed. Retry the run before relying on the draft.",
+    model_failed: "The drafting model did not complete. Retry when the model is available.",
+    max_revisions_failed: "Draft generated, but the critique loop reached its revision limit. Review the draft manually before relying on it.",
+    malformed_output: "Drafting finished with an unreadable model output.",
+  };
+  return labels[errorStatus] || errorStatus.replaceAll("_", " ");
+}
+
+function DraftingShellSkeleton() {
+  const matter = placeholderMatter("...");
+  return (
+    <section className="drafting-shell" data-mobile-panel="draft">
+      <header className="drafting-topbar">
+        <div>
+          <div className="drafting-breadcrumbs">Matters / Preparing desk / Drafting</div>
+          <h1 className="drafting-title">Temporary injunction drafting desk</h1>
+        </div>
+        <div className="topbar-status-group">
+          <span className="status-badge status-amber">connecting</span>
+          <div className="matter-pill"><span className="matter-pill-dot"></span>Preparing matter packet</div>
+        </div>
+      </header>
+      <div className="drafting-layout">
+        <section className="drafting-rail">
+          <div className="drafting-rail-section">
+            <CardLabel className="mb-4">Matter</CardLabel>
+            <div className="summary-grid">
+              <div className="skeleton-line"></div>
+              <div className="skeleton-line"></div>
+              <div className="skeleton-line short"></div>
+            </div>
+          </div>
+          <div className="drafting-rail-section">
+            <CardLabel className="mb-4">Generation activity</CardLabel>
+            <div className="activity-stack" aria-live="polite">
+              {GENERATION_STEPS.map((step, index) => (
+                <div key={step} className={`activity-step ${index === 0 ? "active" : "pending"}`}>
+                  <span className="activity-icon">{index === 0 ? "..." : index + 1}</span>
+                  <span className="font-medium">{step}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+        <section className="document-canvas-wrap">
+          <div className="document-toolbar">
+            <div>
+              <CardLabel className="mb-1">Selected document</CardLabel>
+              <h2 className="text-xl font-bold text-slate-900">Notice of Motion</h2>
+            </div>
+          </div>
+          <article className="document-paper">
+            <div className="paper-meta">
+              <strong>REPUBLIC OF KENYA</strong>
+              <span>IN THE {matter.division}</span>
+              <span className="mono-text">{matter.case_number}</span>
+            </div>
+            <div className="document-divider-title">Notice of Motion</div>
+            <div className="draft-empty">
+              <div className="draft-empty-inner">
+                <h3>Drafting in progress</h3>
+                <p className="text-slate-500">Preparing the legal desk.</p>
+              </div>
+            </div>
+          </article>
+        </section>
+        <aside className="drafting-review-rail">
+          <div className="review-card">
+            <CardLabel className="mb-4">Verification</CardLabel>
+            <div className="skeleton-line"></div>
+          </div>
+        </aside>
+      </div>
+    </section>
+  );
+}
+
 export default function DraftingWorkspace() {
   return (
-    <Suspense fallback={<section className="p-8 text-sm text-slate-500">Loading drafting workspace...</section>}>
+    <Suspense fallback={<DraftingShellSkeleton />}>
       <DraftingWorkspaceContent />
     </Suspense>
   );

@@ -315,6 +315,14 @@ body {
   background: var(--color-warning);
 }
 
+.topbar-status-group {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .drafting-layout {
   display: grid;
   grid-template-columns: minmax(280px, 330px) minmax(440px, 1fr) minmax(290px, 340px);
@@ -339,6 +347,13 @@ body {
 .drafting-rail-section {
   padding: 18px;
   border-bottom: 1px solid var(--color-border);
+}
+
+.rail-heading-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .drafting-label {
@@ -474,7 +489,7 @@ body {
 
 .activity-step {
   display: grid;
-  grid-template-columns: 20px 1fr;
+  grid-template-columns: 24px 1fr;
   gap: 10px;
   align-items: start;
   color: #475569;
@@ -482,8 +497,8 @@ body {
 }
 
 .activity-icon {
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   border-radius: 999px;
   display: grid;
   place-items: center;
@@ -493,6 +508,15 @@ body {
   font-family: var(--font-mono), monospace;
   font-size: 10px;
   font-weight: 600;
+}
+
+.activity-detail {
+  display: block;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.35;
+  margin-top: 2px;
 }
 
 .activity-step.complete .activity-icon {
@@ -524,6 +548,40 @@ body {
   overflow: auto;
   padding: 22px;
   background: linear-gradient(180deg, #f1f5f9, #f8fafc);
+}
+
+.drafting-error-banner {
+  max-width: 840px;
+  margin: 0 auto 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  background: #fef2f2;
+  color: #b91c1c;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 10px 12px;
+}
+
+.skeleton-line {
+  height: 14px;
+  width: 100%;
+  border-radius: 6px;
+  background: linear-gradient(90deg, #e2e8f0, #f8fafc, #e2e8f0);
+  background-size: 220% 100%;
+  animation: skeletonSweep 1.4s ease-in-out infinite;
+}
+
+.skeleton-line.short {
+  width: 72%;
+}
+
+@keyframes skeletonSweep {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
 }
 
 .document-toolbar {
