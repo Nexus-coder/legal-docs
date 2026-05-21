@@ -20,3 +20,4 @@ All notable changes to this project will be documented in this file.
 
 - Drafting failures now rollback failed transactions before recording the failed run event.
 - The drafting workspace no longer treats an unexpectedly closed event stream as a completed run.
+- Citation evidence snippets now strip Kenya Law index metadata and show a usable judgment excerpt.

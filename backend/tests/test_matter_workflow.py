@@ -1043,6 +1043,66 @@ class MatterWorkflowTests(unittest.IsolatedAsyncioTestCase):
         finally:
             kenyalaw_verifier.retrieve_context = original
 
+    def test_verifier_snippet_strips_index_metadata(self):
+        original = kenyalaw_verifier.retrieve_context
+        indexed_text = """
+        # Kinyanjui & another v Nyambura & 2 others [2026] KEELC 2818 (KLR)
+
+        source: Kenya Law
+        source_url: https://new.kenyalaw.org/akn/ke/judgment/keelc/2026/2818
+        canonical_url: https://new.kenyalaw.org/akn/ke/judgment/keelc/2026/2818
+        title: Kinyanjui & another v Nyambura & 2 others [2026] KEELC 2818 (KLR)
+        neutral_citation: [2026] KEELC 2818
+        court:
+        judgment_date: 13 May 2026
+        topic_tags: environment and land
+        document_hash: 4bf4cf945b438887af18dab8c151a7912d8e798bc0dd4641f4
+        corpus_scope: elc
+
+        The court must consider whether the applicant has established a prima facie
+        case and whether damages would be an adequate remedy before granting a
+        temporary injunction over the suit property.
+        """
+        try:
+            kenyalaw_verifier.retrieve_context = lambda *args, **kwargs: [
+                {
+                    "text": indexed_text,
+                    "score": 0.9,
+                    "metadata": {
+                        "title": "Kinyanjui & another v Nyambura & 2 others [2026] KEELC 2818",
+                        "source_url": "https://new.kenyalaw.org/akn/ke/judgment/keelc/2026/2818",
+                    },
+                }
+            ]
+            matter = type(
+                "MatterStub",
+                (),
+                {
+                    "id": 1,
+                    "draft_content": "",
+                    "masked_facts": "",
+                    "citation_evidence": [
+                        type(
+                            "EvidenceStub",
+                            (),
+                            {
+                                "status": "pending",
+                                "citation_type": "precedent",
+                                "title": "Kinyanjui & another v Nyambura & 2 others [2026] KEELC 2818",
+                                "snippet": "temporary injunction",
+                            },
+                        )()
+                    ],
+                },
+            )()
+            evidence = kenyalaw_verifier.verify_matter_citations(matter)
+            self.assertIn("prima facie", evidence[0]["snippet"])
+            self.assertNotIn("source_url", evidence[0]["snippet"])
+            self.assertNotIn("document_hash", evidence[0]["snippet"])
+            self.assertNotIn("corpus_scope", evidence[0]["snippet"])
+        finally:
+            kenyalaw_verifier.retrieve_context = original
+
 
 if __name__ == "__main__":
     unittest.main()
