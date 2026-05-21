@@ -12,6 +12,8 @@ from src.models import Base
 from src.matters.schemas import MatterCreate, MatterRead
 from src.matters import service
 from src.drafting.router import _classify_drafting_error, _drafting_status_from_state
+from src.drafting.schemas import DraftingRequest
+from src.drafting import service as drafting_service
 from src.ingestion.indexer import (
     PineconeDimensionMismatch,
     embedding_safe_nodes,
@@ -337,6 +339,152 @@ class MatterWorkflowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(status, "max_revisions_failed")
         self.assertEqual(error, "max_revisions_failed")
+
+    async def test_drafting_run_creation_records_started_event(self):
+        async with self.Session() as db:
+            user = await self._create_user(db)
+            matter = await service.create_matter(
+                db,
+                user.id,
+                MatterCreate(case_number="ELC-run-start", division="ELC"),
+            )
+            request = DraftingRequest(
+                matter_id=matter.id,
+                jurisdiction="ELC",
+                subcategory="Temporary Injunction",
+            )
+
+            run = await drafting_service.create_drafting_run(
+                db,
+                matter=matter,
+                request=request,
+            )
+            events = await drafting_service.get_drafting_events(db, run.id)
+
+            self.assertEqual(run.status, "running")
+            self.assertEqual(events[0].event_type, "started")
+            self.assertEqual(events[0].stage, "start")
+
+    async def test_completed_drafting_run_streams_historical_events_in_order(self):
+        class FakeLegalAgent:
+            def invoke(self, state):
+                title = (
+                    "Supporting Affidavit"
+                    if "Supporting Affidavit" in state["request"]["instructions"]
+                    else "Notice of Motion"
+                )
+                return {
+                    "draft": f"{title} draft from masked facts.",
+                    "feedback": "PASS",
+                    "revision_count": 1,
+                    "passed_critique": True,
+                }
+
+        original_agent = drafting_service.legal_agent
+        drafting_service.legal_agent = FakeLegalAgent()
+        try:
+            async with self.Session() as db:
+                user = await self._create_user(db)
+                matter = await service.create_matter(
+                    db,
+                    user.id,
+                    MatterCreate(case_number="ELC-run-complete", division="ELC"),
+                )
+                matter.masked_facts = "[PERSON] seeks to preserve [LOCATION]."
+                await service.transition_matter(db, matter, "facts_entered")
+                await service.transition_matter(db, matter, "pii_masked")
+                request = DraftingRequest(
+                    matter_id=matter.id,
+                    jurisdiction="ELC",
+                    subcategory="Temporary Injunction",
+                )
+                run = await drafting_service.create_drafting_run(
+                    db,
+                    matter=matter,
+                    request=request,
+                )
+                completed = await drafting_service.execute_drafting_run(db, run.id)
+
+                self.assertEqual(completed.status, "completed")
+                self.assertEqual(matter.workflow_state, "draft_generated")
+
+            chunks = []
+            async for chunk in drafting_service.stream_drafting_events(
+                run.id,
+                session_factory=self.Session,
+                poll_interval=0,
+            ):
+                chunks.append(chunk)
+            stream_payload = "".join(chunks)
+            self.assertIn('"event_type":"started"', stream_payload)
+            self.assertIn('"event_type":"completed"', stream_payload)
+            self.assertLess(
+                stream_payload.index('"event_type":"started"'),
+                stream_payload.index('"event_type":"completed"'),
+            )
+        finally:
+            drafting_service.legal_agent = original_agent
+
+    async def test_failed_drafting_run_records_safe_error_event(self):
+        async with self.Session() as db:
+            user = await self._create_user(db)
+            matter = await service.create_matter(
+                db,
+                user.id,
+                MatterCreate(case_number="ELC-run-failed", division="ELC"),
+            )
+            request = DraftingRequest(
+                matter_id=matter.id,
+                jurisdiction="ELC",
+                subcategory="Temporary Injunction",
+            )
+            run = await drafting_service.create_drafting_run(
+                db,
+                matter=matter,
+                request=request,
+            )
+
+            failed = await drafting_service.execute_drafting_run(db, run.id)
+            events = await drafting_service.get_drafting_events(db, run.id)
+
+            self.assertEqual(failed.status, "failed")
+            self.assertEqual(failed.error_status, "empty_context")
+            self.assertEqual(events[-1].event_type, "failed")
+            self.assertEqual(events[-1].error_type, "empty_context")
+            self.assertEqual(matter.drafting_error, "empty_context")
+
+    async def test_drafting_run_ownership_prevents_cross_user_streaming(self):
+        async with self.Session() as db:
+            owner = await self._create_user(db, "draft-owner@example.test")
+            other = await self._create_user(db, "draft-other@example.test")
+            matter = await service.create_matter(
+                db,
+                owner.id,
+                MatterCreate(case_number="ELC-run-owned", division="ELC"),
+            )
+            run = await drafting_service.create_drafting_run(
+                db,
+                matter=matter,
+                request=DraftingRequest(
+                    matter_id=matter.id,
+                    jurisdiction="ELC",
+                    subcategory="Temporary Injunction",
+                ),
+            )
+
+            found = await drafting_service.get_user_drafting_run(
+                db,
+                user_id=owner.id,
+                run_id=run.id,
+            )
+            self.assertEqual(found.id, run.id)
+            with self.assertRaises(HTTPException) as not_found:
+                await drafting_service.get_user_drafting_run(
+                    db,
+                    user_id=other.id,
+                    run_id=run.id,
+                )
+            self.assertEqual(not_found.exception.status_code, 404)
 
     def test_elc_filter_accepts_land_matters_and_rejects_criminal_noise(self):
         self.assertTrue(
