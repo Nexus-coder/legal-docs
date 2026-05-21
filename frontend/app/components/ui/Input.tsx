@@ -4,12 +4,14 @@ type InputProps = React.InputHTMLAttributes<HTMLInputElement> & {
   label?: string;
   error?: string;
   extra?: React.ReactNode;
+  endAdornment?: React.ReactNode;
 };
 
 export function Input({
   label,
   error,
   extra,
+  endAdornment,
   className = "",
   id,
   ...props
@@ -31,18 +33,26 @@ export function Input({
           {extra}
         </div>
       )}
-      <input
-        id={inputId}
-        className={`
-          w-full px-4 py-3.5 rounded-xl border-1.5 transition-all duration-200 outline-none text-[0.9375rem] font-sans
-          bg-[#f1f5fb] border-border text-slate-900 placeholder-muted-foreground
-          focus:bg-white focus:border-brand-blue focus:ring-4 focus:ring-brand-blue/10
-          disabled:opacity-50 disabled:cursor-not-allowed
-          ${error ? "border-error bg-error-bg/30" : ""}
-          ${className}
-        `}
-        {...props}
-      />
+      <div className="relative w-full">
+        <input
+          id={inputId}
+          className={`
+            w-full px-4 py-3.5 rounded-xl border-1.5 transition-all duration-200 outline-none text-[0.9375rem] font-sans
+            bg-[#f1f5fb] border-border text-slate-900 placeholder-muted-foreground
+            focus:bg-white focus:border-brand-blue focus:ring-4 focus:ring-brand-blue/10
+            disabled:opacity-50 disabled:cursor-not-allowed
+            ${endAdornment ? "pr-12" : ""}
+            ${error ? "border-error bg-error-bg/30" : ""}
+            ${className}
+          `}
+          {...props}
+        />
+        {endAdornment && (
+          <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none [&_button]:pointer-events-auto">
+            {endAdornment}
+          </div>
+        )}
+      </div>
       {error && <p className="text-xs font-semibold text-error mt-1">{error}</p>}
     </div>
   );
