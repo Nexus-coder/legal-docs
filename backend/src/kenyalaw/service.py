@@ -144,7 +144,7 @@ async def execute_ingestion_run(
         source = await _get_or_create_source(db)
         urls = await _discover_case_urls(db, run, request, fetcher)
         for url in urls[: request.max_documents]:
-            await _process_case_url(
+            await _process_case_url_safely(
                 db,
                 run,
                 source,
@@ -285,7 +285,7 @@ async def retry_failed_urls(
     fetcher = fetcher or KenyaLawFetcher()
     source = await _get_or_create_source(db)
     for url in urls:
-        await _process_case_url(
+        await _process_case_url_safely(
             db,
             retry_run,
             source,
@@ -376,7 +376,7 @@ async def execute_document_repair_run(
             f"Repair will reprocess {len(urls)} stored Kenya Law documents.",
         )
         for url in urls:
-            await _process_case_url(
+            await _process_case_url_safely(
                 db,
                 run,
                 source,
@@ -625,6 +625,44 @@ async def _fail_run(
     )
 
 
+async def _record_document_failure(
+    db: AsyncSession,
+    run: IngestionRun,
+    url: str,
+    stage: str,
+    error_type: str,
+    message: str,
+    *,
+    document: CaseDocument | None = None,
+) -> None:
+    run.failed_count += 1
+    if document is None:
+        result = await db.execute(select(CaseDocument).where(CaseDocument.canonical_url == url))
+        document = result.scalar_one_or_none()
+    if document is not None:
+        document.fetch_status = "failed"
+        document.last_ingestion_run_id = run.id
+        document.last_seen_at = datetime.now(timezone.utc)
+        db.add(document)
+    db.add(
+        IngestionError(
+            ingestion_run_id=run.id,
+            url=url,
+            error_type=error_type,
+            message=message,
+        )
+    )
+    await _record_event(
+        db,
+        run,
+        "failed",
+        stage,
+        message,
+        url=url,
+        error_type=error_type,
+    )
+
+
 def _run_counts(run: IngestionRun) -> dict[str, int]:
     return {
         "discovered": run.discovered_count,
@@ -778,6 +816,53 @@ async def _discover_case_urls(
     return unique
 
 
+async def _process_case_url_safely(
+    db: AsyncSession,
+    run: IngestionRun,
+    source: LegalSource,
+    url: str,
+    fetcher: KenyaLawFetcher,
+    *,
+    dry_run: bool,
+    force_reindex: bool = False,
+) -> None:
+    try:
+        await _process_case_url(
+            db,
+            run,
+            source,
+            url,
+            fetcher,
+            dry_run=dry_run,
+            force_reindex=force_reindex,
+        )
+    except FatalIngestionError as exc:
+        await _record_document_failure(
+            db,
+            run,
+            exc.url,
+            exc.stage,
+            exc.error_type,
+            exc.message,
+        )
+        logger.warning(
+            "kenyalaw_document_failed run_id=%s url=%s error=%s",
+            run.id,
+            exc.url,
+            exc.message,
+        )
+    except Exception as exc:
+        await _record_document_failure(
+            db,
+            run,
+            url,
+            "fetch",
+            exc.__class__.__name__,
+            str(exc),
+        )
+        logger.exception("kenyalaw_document_failed run_id=%s url=%s", run.id, url)
+
+
 async def _process_case_url(
     db: AsyncSession,
     run: IngestionRun,
@@ -800,43 +885,23 @@ async def _process_case_url(
         fetched = fetcher.fetch_text(url)
         page_parsed = parse_case_html(fetched.content, fetched.url)
     except KenyaLawFetchError as exc:
-        run.failed_count += 1
-        db.add(
-            IngestionError(
-                ingestion_run_id=run.id,
-                url=exc.url,
-                error_type=exc.error_type,
-                message=str(exc),
-            )
-        )
-        await _record_event(
+        await _record_document_failure(
             db,
             run,
-            "failed",
+            exc.url,
             "fetch",
+            exc.error_type,
             str(exc),
-            url=exc.url,
-            error_type=exc.error_type,
         )
         return
     except Exception as exc:
-        run.failed_count += 1
-        db.add(
-            IngestionError(
-                ingestion_run_id=run.id,
-                url=url,
-                error_type="parse_error",
-                message=str(exc),
-            )
-        )
-        await _record_event(
+        await _record_document_failure(
             db,
             run,
-            "failed",
+            url,
             "filter",
+            "parse_error",
             str(exc),
-            url=url,
-            error_type="parse_error",
         )
         return
 
@@ -941,12 +1006,16 @@ async def _process_case_url(
             _markdown_for(parsed), _metadata_for(parsed), namespace=PINECONE_NAMESPACE
         )
     except Exception as exc:
-        raise FatalIngestionError(
-            url=parsed.canonical_url,
-            stage="index",
-            error_type=exc.__class__.__name__,
-            message=str(exc),
-        ) from exc
+        await _record_document_failure(
+            db,
+            run,
+            parsed.canonical_url,
+            "index",
+            exc.__class__.__name__,
+            str(exc),
+            document=document,
+        )
+        return
     document.indexed_at = datetime.now(timezone.utc)
     document.fetch_status = "indexed"
     run.indexed_count += 1
@@ -1011,36 +1080,31 @@ async def _record_extraction_failure(
     *,
     dry_run: bool,
 ) -> None:
-    run.failed_count += 1
     document = await _upsert_failed_case_document(db, source, parsed, failure, run_id=run.id)
     await db.execute(delete(CaseChunk).where(CaseChunk.case_document_id == document.id))
     if not dry_run and document.indexed_at:
         try:
             delete_document_vectors(parsed.canonical_url, namespace=PINECONE_NAMESPACE)
         except Exception as exc:
-            raise FatalIngestionError(
-                url=parsed.canonical_url,
-                stage="index",
-                error_type=exc.__class__.__name__,
-                message=f"Unable to delete stale vectors before marking extraction failure: {exc}",
-            ) from exc
+            await _record_document_failure(
+                db,
+                run,
+                parsed.canonical_url,
+                "index",
+                exc.__class__.__name__,
+                f"Unable to delete stale vectors before marking extraction failure: {exc}",
+                document=document,
+            )
+            return
     document.indexed_at = None
-    db.add(
-        IngestionError(
-            ingestion_run_id=run.id,
-            url=parsed.canonical_url,
-            error_type=failure.status,
-            message=failure.message,
-        )
-    )
-    await _record_event(
+    await _record_document_failure(
         db,
         run,
-        "failed",
+        parsed.canonical_url,
         "fetch",
+        failure.status,
         failure.message,
-        url=parsed.canonical_url,
-        error_type=failure.status,
+        document=document,
     )
 
 

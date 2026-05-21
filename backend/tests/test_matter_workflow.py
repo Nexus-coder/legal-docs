@@ -27,7 +27,13 @@ from src.kenyalaw.extraction import (
 )
 from src.kenyalaw.fetcher import FetchBinaryResult, FetchResult, KenyaLawFetchError
 from src.kenyalaw.filtering import is_elc_relevant
-from src.kenyalaw.models import CaseChunk, CaseDocument, IngestionEvent, LegalSource
+from src.kenyalaw.models import (
+    CaseChunk,
+    CaseDocument,
+    IngestionError,
+    IngestionEvent,
+    LegalSource,
+)
 from src.kenyalaw.parser import parse_case_html
 from src.kenyalaw.schemas import IngestionRunCreate
 from src.kenyalaw import service as kenyalaw_service
@@ -757,28 +763,47 @@ class MatterWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"event_type":"started"', stream_payload)
         self.assertIn('"event_type":"completed"', stream_payload)
 
-    async def test_indexing_failure_records_judgment_url_event(self):
+    async def test_indexing_failure_records_judgment_url_event_and_continues(self):
         listing = """
         <html><body>
           <a href="/akn/ke/judgment/keelc/2024/10/">ELC case</a>
+          <a href="/akn/ke/judgment/keelc/2024/11/">Second ELC case</a>
         </body></html>
         """
-        case = """
+        failing_case = """
         <html><head><title>Mwangi v Kamau [2024] KEELC 10 (KLR)</title></head>
         <body>
           <p>Court: Environment and Land Court at Nairobi</p>
           <p>The plaintiff seeks an injunction over land parcel LR 1.</p>
         </body></html>
         """
+        succeeding_case = """
+        <html><head><title>Otieno v Achieng [2024] KEELC 11 (KLR)</title></head>
+        <body>
+          <p>Court: Environment and Land Court at Nairobi</p>
+          <p>The plaintiff seeks an injunction over land parcel LR 2.</p>
+        </body></html>
+        """
 
-        def failing_index(*args, **kwargs):
-            raise RuntimeError("vector write rejected")
+        index_calls = []
+
+        def flaky_index(markdown, metadata, namespace=None):
+            index_calls.append((markdown, metadata, namespace))
+            if len(index_calls) == 1:
+                raise RuntimeError("vector write rejected")
+            return 2
 
         original = kenyalaw_service.index_markdown
-        kenyalaw_service.index_markdown = failing_index
+        kenyalaw_service.index_markdown = flaky_index
         try:
             fetcher = FakeKenyaLawFetcher(
-                {"KEELC": listing, "2024/10/source": realistic_judgment_text(), "2024/10": case}
+                {
+                    "KEELC": listing,
+                    "2024/10/source": realistic_judgment_text(),
+                    "2024/10": failing_case,
+                    "2024/11/source": realistic_judgment_text(),
+                    "2024/11": succeeding_case,
+                }
             )
             async with self.Session() as db:
                 run = await kenyalaw_service.start_ingestion_run(
@@ -787,18 +812,43 @@ class MatterWorkflowTests(unittest.IsolatedAsyncioTestCase):
                     fetcher=fetcher,
                     preflight_validator=lambda: None,
                 )
-                self.assertEqual(run.status, "failed")
+                self.assertEqual(run.status, "completed")
+                self.assertEqual(run.failed_count, 1)
+                self.assertEqual(run.indexed_count, 1)
 
                 events = await db.execute(
                     select(IngestionEvent)
                     .where(IngestionEvent.ingestion_run_id == run.id)
                     .order_by(IngestionEvent.id)
                 )
-                failed_event = events.scalars().all()[-1]
+                event_list = events.scalars().all()
+                failed_event = next(
+                    event
+                    for event in event_list
+                    if event.event_type == "failed" and event.stage == "index"
+                )
+                indexed_event = next(
+                    event
+                    for event in event_list
+                    if event.event_type == "indexed" and event.stage == "index"
+                )
                 self.assertEqual(failed_event.stage, "index")
                 self.assertEqual(failed_event.error_type, "RuntimeError")
                 self.assertIn("/akn/ke/judgment/keelc/2024/10/", failed_event.url)
                 self.assertEqual(failed_event.message, "vector write rejected")
+                self.assertIn("/akn/ke/judgment/keelc/2024/11/", indexed_event.url)
+
+                errors = await db.execute(
+                    select(IngestionError).where(IngestionError.ingestion_run_id == run.id)
+                )
+                self.assertEqual(len(errors.scalars().all()), 1)
+
+                documents = await db.execute(
+                    select(CaseDocument).order_by(CaseDocument.canonical_url)
+                )
+                document_list = documents.scalars().all()
+                self.assertEqual(document_list[0].fetch_status, "failed")
+                self.assertEqual(document_list[1].fetch_status, "indexed")
         finally:
             kenyalaw_service.index_markdown = original
 
