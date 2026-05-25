@@ -10,10 +10,17 @@ from sqlalchemy.orm import selectinload
 
 from src.agent.graph import legal_agent
 from src.database import SessionFactory
+from src.drafting.editor import (
+    editor_json_to_docx,
+    editor_json_to_plain_text,
+    editor_json_to_preview_html,
+    text_to_editor_json,
+    validate_editor_json,
+)
 from src.drafting.models import DraftingEvent, DraftingRun
 from src.drafting.schemas import DraftingEventRead, DraftingRequest, GeneratedBlock
 from src.matters import service as matters_service
-from src.matters.models import Matter
+from src.matters.models import CitationEvidence, DraftDocument, DraftDocumentRevision, Matter
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +151,120 @@ async def get_drafting_run(db: AsyncSession, run_id: int) -> DraftingRun | None:
         select(DraftingRun).options(selectinload(DraftingRun.matter)).where(DraftingRun.id == run_id)
     )
     return result.scalar_one_or_none()
+
+
+async def get_user_draft_document(
+    db: AsyncSession,
+    *,
+    user_id: int,
+    document_id: int,
+) -> DraftDocument:
+    result = await db.execute(
+        select(DraftDocument)
+        .join(Matter, DraftDocument.matter_id == Matter.id)
+        .where(DraftDocument.id == document_id, Matter.user_id == user_id)
+        .options(selectinload(DraftDocument.matter))
+    )
+    document = result.scalar_one_or_none()
+    if document is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Draft document not found")
+    return document
+
+
+async def save_draft_document_editor_json(
+    db: AsyncSession,
+    *,
+    user_id: int,
+    document_id: int,
+    editor_json: dict,
+    expected_revision: int,
+    revision_type: str = "manual",
+) -> DraftDocument:
+    document = await get_user_draft_document(db, user_id=user_id, document_id=document_id)
+    current_revision = document.edit_revision or 0
+    if expected_revision != current_revision:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="stale_revision",
+        )
+    allowed_evidence_ids = await _matter_evidence_ids(db, document.matter_id)
+    validated_json = validate_editor_json(editor_json, allowed_evidence_ids)
+    content = editor_json_to_plain_text(validated_json)
+    now = datetime.now(timezone.utc)
+    document.editor_json = validated_json
+    document.content = content
+    document.edit_revision = current_revision + 1
+    document.last_edited_at = now
+    document.last_edited_by = user_id
+    document.updated_at = now
+    document.status = "draft" if document.status == "verified" else document.status
+    db.add(
+        DraftDocumentRevision(
+            draft_document_id=document.id,
+            user_id=user_id,
+            revision_type=revision_type if revision_type in {"manual", "autosave", "restore"} else "manual",
+            edit_revision=document.edit_revision,
+            editor_json=validated_json,
+            content=content,
+        )
+    )
+    await db.commit()
+    await db.refresh(document)
+    await _refresh_matter_draft_content(db, document.matter_id)
+    await db.commit()
+    await db.refresh(document)
+    return document
+
+
+async def draft_document_export_preview(
+    db: AsyncSession,
+    *,
+    user_id: int,
+    document_id: int,
+) -> str:
+    document = await get_user_draft_document(db, user_id=user_id, document_id=document_id)
+    editor_json = document.editor_json or text_to_editor_json(document.content)
+    allowed_evidence_ids = await _matter_evidence_ids(db, document.matter_id)
+    validated_json = validate_editor_json(editor_json, allowed_evidence_ids)
+    return editor_json_to_preview_html(validated_json)
+
+
+async def draft_document_export_docx(
+    db: AsyncSession,
+    *,
+    user_id: int,
+    document_id: int,
+) -> tuple[str, bytes]:
+    document = await get_user_draft_document(db, user_id=user_id, document_id=document_id)
+    editor_json = document.editor_json or text_to_editor_json(document.content)
+    allowed_evidence_ids = await _matter_evidence_ids(db, document.matter_id)
+    validated_json = validate_editor_json(editor_json, allowed_evidence_ids)
+    filename = f"{document.title.lower().replace(' ', '-')}-{document.id}.docx"
+    return filename, editor_json_to_docx(validated_json)
+
+
+async def _matter_evidence_ids(db: AsyncSession, matter_id: int) -> set[int]:
+    result = await db.execute(
+        select(CitationEvidence.id).where(CitationEvidence.matter_id == matter_id)
+    )
+    return set(result.scalars().all())
+
+
+async def _refresh_matter_draft_content(db: AsyncSession, matter_id: int) -> None:
+    result = await db.execute(
+        select(DraftDocument)
+        .where(DraftDocument.matter_id == matter_id)
+        .order_by(DraftDocument.id)
+    )
+    documents = result.scalars().all()
+    matter = await db.get(Matter, matter_id)
+    if matter is None:
+        return
+    matter.draft_content = "\n\n".join(
+        f"# {document.title}\n\n{document.content}"
+        for document in documents
+        if document.content
+    )
 
 
 async def get_drafting_events(

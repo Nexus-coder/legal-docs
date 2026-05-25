@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List
+from typing import Any, List
 
 from pydantic import ConfigDict
 
@@ -62,3 +62,13 @@ class CitationResponse(CustomBaseModel):
     held: str
     court: str | None = None
     source: str | None = None
+
+
+class DraftDocumentSaveRequest(CustomBaseModel):
+    editor_json: dict[str, Any]
+    expected_revision: int
+    revision_type: str = "manual"
+
+
+class DraftDocumentSaveResponse(CustomBaseModel):
+    document: DraftDocumentRead

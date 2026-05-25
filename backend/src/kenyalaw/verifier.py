@@ -141,5 +141,76 @@ def _similarity(left: str, right: str) -> float:
 
 
 def _bounded_snippet(text: str, limit: int = 700) -> str:
-    compact = re.sub(r"\s+", " ", text or "").strip()
+    usable_text = _strip_index_metadata(text)
+    paragraph = _best_evidence_paragraph(usable_text)
+    compact = re.sub(r"\s+", " ", paragraph).strip()
     return compact[:limit] if compact else "Retrieved result did not include text content."
+
+
+def _strip_index_metadata(text: str) -> str:
+    normalized = (text or "").replace("\r\n", "\n")
+    lines = []
+    for line in normalized.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("# "):
+            continue
+        if _is_index_metadata_line(stripped):
+            continue
+        lines.append(stripped)
+    stripped = "\n\n".join(lines).strip()
+    if stripped:
+        return stripped
+
+    compact = re.sub(r"\s+", " ", normalized).strip()
+    return re.sub(
+        r"^#?\s*.*?\bcorpus_scope:\s*\S+\s*",
+        "",
+        compact,
+        count=1,
+        flags=re.IGNORECASE,
+    ).strip()
+
+
+def _is_index_metadata_line(line: str) -> bool:
+    return bool(
+        re.match(
+            r"^(source|source_url|canonical_url|title|neutral_citation|court|"
+            r"judgment_date|topic_tags|source_document_url|source_format|"
+            r"extraction_status|text_quality_score|document_hash|corpus_scope):\s*",
+            line,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _best_evidence_paragraph(text: str) -> str:
+    paragraphs = [
+        re.sub(r"\s+", " ", paragraph).strip()
+        for paragraph in re.split(r"\n\s*\n", text or "")
+        if paragraph.strip()
+    ]
+    if not paragraphs:
+        return ""
+
+    legal_terms = (
+        "injunction",
+        "prima facie",
+        "irreparable",
+        "balance of convenience",
+        "application",
+        "applicant",
+        "respondent",
+        "court",
+        "held",
+        "order",
+    )
+    for paragraph in paragraphs:
+        lowered = paragraph.lower()
+        if len(paragraph) >= 80 and any(term in lowered for term in legal_terms):
+            return paragraph
+    for paragraph in paragraphs:
+        if len(paragraph) >= 80:
+            return paragraph
+    return paragraphs[0]

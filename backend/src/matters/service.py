@@ -5,7 +5,14 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-from src.matters.models import CitationEvidence, DraftDocument, Matter, MatterActivity
+from src.drafting.editor import text_to_editor_json
+from src.matters.models import (
+    CitationEvidence,
+    DraftDocument,
+    DraftDocumentRevision,
+    Matter,
+    MatterActivity,
+)
 from src.matters.schemas import MatterCreate, WORKFLOW_STATES
 
 logger = logging.getLogger(__name__)
@@ -198,27 +205,54 @@ async def upsert_draft_document(
     )
     document = result.scalar_one_or_none()
     now = datetime.now(timezone.utc)
+    editor_json = text_to_editor_json(content)
     if document is None:
         document = DraftDocument(
             matter_id=matter.id,
             document_type=document_type,
             title=title,
             content=content,
+            editor_json=editor_json,
+            generated_editor_json=editor_json,
             status=status,
             error_status=error_status,
             revision_count=revision_count,
+            edit_revision=0,
             generated_at=now,
             updated_at=now,
         )
         db.add(document)
+        db.add(
+            DraftDocumentRevision(
+                document=document,
+                user_id=matter.user_id,
+                revision_type="generated",
+                edit_revision=0,
+                editor_json=editor_json,
+                content=content,
+            )
+        )
         return document
 
     document.title = title
     document.content = content
+    document.editor_json = editor_json
+    document.generated_editor_json = editor_json
     document.status = status
     document.error_status = error_status
     document.revision_count = revision_count
+    document.edit_revision = (document.edit_revision or 0) + 1
     document.updated_at = now
+    db.add(
+        DraftDocumentRevision(
+            draft_document_id=document.id,
+            user_id=matter.user_id,
+            revision_type="generated",
+            edit_revision=document.edit_revision,
+            editor_json=editor_json,
+            content=content,
+        )
+    )
     return document
 
 

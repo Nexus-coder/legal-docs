@@ -11,6 +11,8 @@ from src.auth.models import User
 from src.models import Base
 from src.matters.schemas import MatterCreate, MatterRead
 from src.matters import service
+from src.matters.models import CitationEvidence, DraftDocumentRevision
+from src.drafting.editor import validate_editor_json
 from src.drafting.router import _classify_drafting_error, _drafting_status_from_state
 from src.drafting.schemas import DraftingRequest
 from src.drafting import service as drafting_service
@@ -309,6 +311,245 @@ class MatterWorkflowTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(by_type["injunction_motion"].content, "Updated motion draft.")
             self.assertEqual(by_type["injunction_motion"].status, "verified")
             self.assertEqual(by_type["supporting_affidavit"].error_status, "max_revisions_failed")
+
+    def test_tiptap_json_validation_rejects_unknown_and_script_payloads(self):
+        valid = {
+            "type": "doc",
+            "content": [
+                {
+                    "type": "paragraph",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Giella",
+                            "marks": [{"type": "citationRef", "attrs": {"evidenceId": 10}}],
+                        }
+                    ],
+                }
+            ],
+        }
+        self.assertEqual(validate_editor_json(valid, {10})["type"], "doc")
+
+        with self.assertRaises(HTTPException) as unknown:
+            validate_editor_json({"type": "doc", "content": [{"type": "html"}]}, set())
+        self.assertEqual(unknown.exception.status_code, 422)
+
+        with self.assertRaises(HTTPException) as script:
+            validate_editor_json(
+                {
+                    "type": "doc",
+                    "content": [
+                        {
+                            "type": "paragraph",
+                            "content": [{"type": "text", "text": "<script>alert(1)</script>"}],
+                        }
+                    ],
+                },
+                set(),
+            )
+        self.assertEqual(script.exception.status_code, 422)
+
+    async def test_save_editor_json_updates_revision_and_plain_text(self):
+        async with self.Session() as db:
+            user = await self._create_user(db)
+            matter = await service.create_matter(
+                db,
+                user.id,
+                MatterCreate(case_number="ELC-editor-save", division="ELC"),
+            )
+            evidence = await service.upsert_citation_evidence(
+                db,
+                matter,
+                [
+                    {
+                        "citation_type": "precedent",
+                        "title": "Giella v Cassman Brown",
+                        "snippet": "Injunction test.",
+                        "confidence": 1.0,
+                        "status": "verified",
+                    }
+                ],
+            )
+            document = await service.upsert_draft_document(
+                db,
+                matter,
+                document_type="injunction_motion",
+                title="Notice of Motion",
+                content="Initial draft.",
+                status="draft",
+                error_status=None,
+                revision_count=1,
+            )
+            await db.commit()
+            await db.refresh(document)
+            await db.refresh(evidence[0])
+
+            saved = await drafting_service.save_draft_document_editor_json(
+                db,
+                user_id=user.id,
+                document_id=document.id,
+                expected_revision=0,
+                editor_json={
+                    "type": "doc",
+                    "content": [
+                        {
+                            "type": "paragraph",
+                            "content": [
+                                {"type": "text", "text": "Edited draft with "},
+                                {
+                                    "type": "text",
+                                    "text": "Giella",
+                                    "marks": [
+                                        {
+                                            "type": "citationRef",
+                                            "attrs": {"evidenceId": evidence[0].id},
+                                        }
+                                    ],
+                                },
+                            ],
+                        }
+                    ],
+                },
+            )
+
+            self.assertEqual(saved.content, "Edited draft with Giella")
+            self.assertEqual(saved.edit_revision, 1)
+            self.assertEqual(saved.last_edited_by, user.id)
+            revisions = (
+                await db.execute(
+                    select(DraftDocumentRevision).where(
+                        DraftDocumentRevision.draft_document_id == document.id
+                    )
+                )
+            ).scalars().all()
+            self.assertEqual([revision.revision_type for revision in revisions], ["generated", "manual"])
+
+    async def test_save_editor_json_rejects_stale_and_cross_matter_citation_refs(self):
+        async with self.Session() as db:
+            user = await self._create_user(db)
+            matter = await service.create_matter(
+                db,
+                user.id,
+                MatterCreate(case_number="ELC-editor-owned", division="ELC"),
+            )
+            other_matter = await service.create_matter(
+                db,
+                user.id,
+                MatterCreate(case_number="ELC-editor-other", division="ELC"),
+            )
+            foreign_evidence = CitationEvidence(
+                matter_id=other_matter.id,
+                citation_type="precedent",
+                title="Other case",
+                snippet="Other matter.",
+                confidence=1.0,
+            )
+            db.add(foreign_evidence)
+            document = await service.upsert_draft_document(
+                db,
+                matter,
+                document_type="injunction_motion",
+                title="Notice of Motion",
+                content="Initial draft.",
+                status="draft",
+                error_status=None,
+                revision_count=1,
+            )
+            await db.commit()
+            await db.refresh(document)
+            await db.refresh(foreign_evidence)
+
+            with self.assertRaises(HTTPException) as stale:
+                await drafting_service.save_draft_document_editor_json(
+                    db,
+                    user_id=user.id,
+                    document_id=document.id,
+                    expected_revision=99,
+                    editor_json={"type": "doc", "content": [{"type": "paragraph"}]},
+                )
+            self.assertEqual(stale.exception.status_code, 409)
+            self.assertEqual(stale.exception.detail, "stale_revision")
+
+            with self.assertRaises(HTTPException) as invalid_citation:
+                await drafting_service.save_draft_document_editor_json(
+                    db,
+                    user_id=user.id,
+                    document_id=document.id,
+                    expected_revision=0,
+                    editor_json={
+                        "type": "doc",
+                        "content": [
+                            {
+                                "type": "paragraph",
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "text": "Other case",
+                                        "marks": [
+                                            {
+                                                "type": "citationRef",
+                                                "attrs": {"evidenceId": foreign_evidence.id},
+                                            }
+                                        ],
+                                    }
+                                ],
+                            }
+                        ],
+                    },
+                )
+            self.assertEqual(invalid_citation.exception.status_code, 422)
+
+    async def test_export_preview_and_docx_use_edited_content(self):
+        async with self.Session() as db:
+            user = await self._create_user(db)
+            matter = await service.create_matter(
+                db,
+                user.id,
+                MatterCreate(case_number="ELC-export", division="ELC"),
+            )
+            document = await service.upsert_draft_document(
+                db,
+                matter,
+                document_type="injunction_motion",
+                title="Notice of Motion",
+                content="Initial draft.",
+                status="draft",
+                error_status=None,
+                revision_count=1,
+            )
+            await db.commit()
+            await db.refresh(document)
+
+            await drafting_service.save_draft_document_editor_json(
+                db,
+                user_id=user.id,
+                document_id=document.id,
+                expected_revision=0,
+                editor_json={
+                    "type": "doc",
+                    "content": [
+                        {
+                            "type": "paragraph",
+                            "content": [{"type": "text", "text": "Edited export text."}],
+                        }
+                    ],
+                },
+            )
+            preview = await drafting_service.draft_document_export_preview(
+                db,
+                user_id=user.id,
+                document_id=document.id,
+            )
+            _, docx_payload = await drafting_service.draft_document_export_docx(
+                db,
+                user_id=user.id,
+                document_id=document.id,
+            )
+
+            self.assertIn("Edited export text.", preview)
+            with zipfile.ZipFile(BytesIO(docx_payload)) as archive:
+                document_xml = archive.read("word/document.xml").decode("utf-8")
+            self.assertIn("Edited export text.", document_xml)
 
     def test_drafting_error_statuses_are_safe_and_named(self):
         self.assertEqual(
@@ -1040,6 +1281,66 @@ class MatterWorkflowTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(evidence[0]["status"], "verified")
             self.assertEqual(evidence[0]["source"], "Kenya Law")
             self.assertIn("source_url", evidence[0])
+        finally:
+            kenyalaw_verifier.retrieve_context = original
+
+    def test_verifier_snippet_strips_index_metadata(self):
+        original = kenyalaw_verifier.retrieve_context
+        indexed_text = """
+        # Kinyanjui & another v Nyambura & 2 others [2026] KEELC 2818 (KLR)
+
+        source: Kenya Law
+        source_url: https://new.kenyalaw.org/akn/ke/judgment/keelc/2026/2818
+        canonical_url: https://new.kenyalaw.org/akn/ke/judgment/keelc/2026/2818
+        title: Kinyanjui & another v Nyambura & 2 others [2026] KEELC 2818 (KLR)
+        neutral_citation: [2026] KEELC 2818
+        court:
+        judgment_date: 13 May 2026
+        topic_tags: environment and land
+        document_hash: 4bf4cf945b438887af18dab8c151a7912d8e798bc0dd4641f4
+        corpus_scope: elc
+
+        The court must consider whether the applicant has established a prima facie
+        case and whether damages would be an adequate remedy before granting a
+        temporary injunction over the suit property.
+        """
+        try:
+            kenyalaw_verifier.retrieve_context = lambda *args, **kwargs: [
+                {
+                    "text": indexed_text,
+                    "score": 0.9,
+                    "metadata": {
+                        "title": "Kinyanjui & another v Nyambura & 2 others [2026] KEELC 2818",
+                        "source_url": "https://new.kenyalaw.org/akn/ke/judgment/keelc/2026/2818",
+                    },
+                }
+            ]
+            matter = type(
+                "MatterStub",
+                (),
+                {
+                    "id": 1,
+                    "draft_content": "",
+                    "masked_facts": "",
+                    "citation_evidence": [
+                        type(
+                            "EvidenceStub",
+                            (),
+                            {
+                                "status": "pending",
+                                "citation_type": "precedent",
+                                "title": "Kinyanjui & another v Nyambura & 2 others [2026] KEELC 2818",
+                                "snippet": "temporary injunction",
+                            },
+                        )()
+                    ],
+                },
+            )()
+            evidence = kenyalaw_verifier.verify_matter_citations(matter)
+            self.assertIn("prima facie", evidence[0]["snippet"])
+            self.assertNotIn("source_url", evidence[0]["snippet"])
+            self.assertNotIn("document_hash", evidence[0]["snippet"])
+            self.assertNotIn("corpus_scope", evidence[0]["snippet"])
         finally:
             kenyalaw_verifier.retrieve_context = original
 
