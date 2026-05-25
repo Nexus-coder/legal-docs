@@ -70,9 +70,14 @@ class DraftDocumentRead(CustomBaseModel):
     document_type: str
     title: str
     content: str
+    editor_json: dict | None = None
+    generated_editor_json: dict | None = None
     status: str
     error_status: str | None = None
     revision_count: int = 0
+    edit_revision: int = 0
+    last_edited_at: datetime | None = None
+    last_edited_by: int | None = None
     generated_at: datetime
     updated_at: datetime
 

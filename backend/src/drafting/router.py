@@ -1,14 +1,22 @@
 from typing import Annotated
+from io import BytesIO
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.auth.dependencies import get_current_user
 from src.auth.schemas import UserRead
 from src.database import get_db
 from src.drafting import service as drafting_service
-from src.drafting.schemas import DraftingRequest, DraftingResponse, DraftingRunRead, GeneratedBlock
+from src.drafting.schemas import (
+    DraftDocumentSaveRequest,
+    DraftDocumentSaveResponse,
+    DraftingRequest,
+    DraftingResponse,
+    DraftingRunRead,
+    GeneratedBlock,
+)
 from src.matters import service as matters_service
 
 router = APIRouter()
@@ -115,3 +123,52 @@ def get_citations():
         "title": "Giella v. Cassman Brown & Co. Ltd [1973] EA 358",
         "held": '"The conditions for the grant of an interlocutory injunction are now well settled in East Africa; first, an applicant must show a prima facie case with a probability of success. Secondly, an interlocutory injunction will not normally be granted unless the applicant might otherwise suffer irreparable injury..."',
     }
+
+
+@router.patch("/documents/{document_id}", response_model=DraftDocumentSaveResponse)
+async def save_draft_document(
+    document_id: int,
+    request: DraftDocumentSaveRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[UserRead, Depends(get_current_user)],
+):
+    document = await drafting_service.save_draft_document_editor_json(
+        db,
+        user_id=current_user.id,
+        document_id=document_id,
+        editor_json=request.editor_json,
+        expected_revision=request.expected_revision,
+        revision_type=request.revision_type,
+    )
+    return {"document": document}
+
+
+@router.get("/documents/{document_id}/export/preview", response_class=HTMLResponse)
+async def preview_draft_document_export(
+    document_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[UserRead, Depends(get_current_user)],
+):
+    return await drafting_service.draft_document_export_preview(
+        db,
+        user_id=current_user.id,
+        document_id=document_id,
+    )
+
+
+@router.get("/documents/{document_id}/export/docx")
+async def download_draft_document_docx(
+    document_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[UserRead, Depends(get_current_user)],
+):
+    filename, payload = await drafting_service.draft_document_export_docx(
+        db,
+        user_id=current_user.id,
+        document_id=document_id,
+    )
+    return StreamingResponse(
+        BytesIO(payload),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

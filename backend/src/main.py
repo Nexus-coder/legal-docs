@@ -27,6 +27,7 @@ async def lifespan(app: FastAPI):
             if "sqlite" in settings.DATABASE_URL:
                 await conn.run_sync(_backfill_matter_workflow_columns)
                 await conn.run_sync(_backfill_citation_evidence_columns)
+                await conn.run_sync(_backfill_draft_document_editor_columns)
                 await conn.run_sync(_backfill_case_document_columns)
     yield
 
@@ -91,6 +92,35 @@ def _backfill_citation_evidence_columns(sync_conn):
         if name not in columns:
             sync_conn.exec_driver_sql(
                 f"ALTER TABLE citation_evidence ADD COLUMN {name} {ddl}"
+            )
+
+
+def _backfill_draft_document_editor_columns(sync_conn):
+    tables = {
+        row[0]
+        for row in sync_conn.exec_driver_sql(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    if "draft_document" not in tables:
+        return
+    columns = {
+        row[1]
+        for row in sync_conn.exec_driver_sql(
+            "PRAGMA table_info(draft_document)"
+        ).fetchall()
+    }
+    additions = {
+        "editor_json": "JSON",
+        "generated_editor_json": "JSON",
+        "edit_revision": "INTEGER DEFAULT 0",
+        "last_edited_at": "DATETIME",
+        "last_edited_by": "INTEGER",
+    }
+    for name, ddl in additions.items():
+        if name not in columns:
+            sync_conn.exec_driver_sql(
+                f"ALTER TABLE draft_document ADD COLUMN {name} {ddl}"
             )
 
 

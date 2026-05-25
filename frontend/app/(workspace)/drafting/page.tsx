@@ -7,6 +7,7 @@ import { API_BASE_URL } from "@/lib/api";
 import { Button } from "@/app/components/ui/Button";
 import { Badge } from "@/app/components/ui/Badge";
 import { Card, CardLabel } from "@/app/components/ui/Card";
+import { DraftEditor, type EditableDraftDocument } from "./_components/DraftEditor";
 
 type Evidence = {
   id: number;
@@ -18,15 +19,7 @@ type Evidence = {
   status: string;
 };
 
-type DraftDocument = {
-  id: number;
-  document_type: string;
-  title: string;
-  content: string;
-  status: string;
-  error_status?: string | null;
-  revision_count: number;
-};
+type DraftDocument = EditableDraftDocument;
 
 type Matter = {
   id: number;
@@ -257,11 +250,33 @@ function DraftingWorkspaceContent() {
   const [activeRun, setActiveRun] = useState<DraftingRun | null>(null);
   const [events, setEvents] = useState<DraftingEvent[]>([]);
   const [connection, setConnection] = useState<ConnectionState>("idle");
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const eventSourceRef = useRef<EventSource | null>(null);
   const streamRunIdRef = useRef<number | null>(null);
   const terminalEventSeenRef = useRef(false);
   const autoStartedMatterRef = useRef<number | null>(null);
   const matterRef = useRef<Matter | null>(null);
+
+  useEffect(() => {
+    if (isFullscreen) {
+      document.body.classList.add("fullscreen-active");
+    } else {
+      document.body.classList.remove("fullscreen-active");
+    }
+    return () => {
+      document.body.classList.remove("fullscreen-active");
+    };
+  }, [isFullscreen]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && isFullscreen) {
+        setIsFullscreen(false);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isFullscreen]);
 
   const authHeaders = useMemo<Record<string, string>>(() => {
     const headers: Record<string, string> = {};
@@ -419,6 +434,23 @@ function DraftingWorkspaceContent() {
     }
   };
 
+  const handleDocumentSaved = useCallback((savedDocument: DraftDocument) => {
+    setMatter((current) => {
+      if (!current) return current;
+      const draftDocuments = current.draft_documents.map((document) =>
+        document.id === savedDocument.id ? savedDocument : document,
+      );
+      return {
+        ...current,
+        draft_documents: draftDocuments,
+        draft_content: draftDocuments
+          .filter((document) => document.content)
+          .map((document) => `# ${document.title}\n\n${document.content}`)
+          .join("\n\n"),
+      };
+    });
+  }, []);
+
   if (!matterId) {
     return (
       <section className="p-8">
@@ -449,7 +481,7 @@ function DraftingWorkspaceContent() {
   const runLabel = activeRun ? `Run #${activeRun.id}` : "No active run";
 
   return (
-    <section className="drafting-shell" data-mobile-panel={mobilePanel}>
+    <section className={`drafting-shell ${isFullscreen ? "fullscreen-mode" : ""}`} data-mobile-panel={mobilePanel}>
       <header className="drafting-topbar">
         <div>
           <div className="drafting-breadcrumbs">Matters / {displayMatter.case_number} / Drafting</div>
@@ -578,6 +610,16 @@ function DraftingWorkspaceContent() {
               <h2 className="text-xl font-bold text-slate-900">{activeDocument?.title || activePacketItem?.title || "Draft document"}</h2>
             </div>
             <div className="toolbar-actions">
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={!activeContent}
+                onClick={() => setIsFullscreen((prev) => !prev)}
+                title={isFullscreen ? "Exit Full Screen" : "Full Screen"}
+              >
+                <i className={`fas ${isFullscreen ? "fa-compress" : "fa-expand"} mr-1.5`}></i>
+                {isFullscreen ? "Exit Full Screen" : "Full Screen"}
+              </Button>
               <Button variant="secondary" size="sm" disabled={!activeContent} onClick={() => navigator.clipboard?.writeText(activeContent)}>
                 Copy text
               </Button>
@@ -591,34 +633,44 @@ function DraftingWorkspaceContent() {
           </div>
 
           <article className="document-paper">
-            <div className="paper-meta">
-              <strong>REPUBLIC OF KENYA</strong>
-              <span>IN THE {displayMatter.jurisdiction || displayMatter.division}</span>
-              <span className="mono-text">{displayMatter.case_number}</span>
-            </div>
-            <div className="document-divider-title">
-              {activeDocument?.title || activePacketItem?.title || "Draft document"}
-            </div>
-            {activeContent ? (
-              <div className="draft-copy">{activeContent}</div>
+            {activeDocument && activeContent ? (
+              <DraftEditor
+                document={activeDocument}
+                evidence={displayMatter.citation_evidence}
+                authHeaders={authHeaders}
+                onDocumentSaved={handleDocumentSaved}
+                onError={setError}
+                isFullscreen={isFullscreen}
+                onToggleFullscreen={() => setIsFullscreen((prev) => !prev)}
+              />
             ) : (
-              <div className="draft-empty">
-                <div className="draft-empty-inner">
-                  <h3 className="text-xl font-bold text-slate-900 mb-2">
-                    {isDrafting ? "Drafting in progress" : "No draft generated yet"}
-                  </h3>
-                  <p className="text-slate-500 mb-6">
-                    {isDrafting
-                      ? "The desk is preparing the motion and affidavit from masked matter facts."
-                      : "Generate the injunction packet to create the Notice of Motion and Supporting Affidavit."}
-                  </p>
-                  {!isDrafting && (
-                    <Button onClick={() => startDrafting()} size="lg" disabled={!matter}>
-                      Generate Motion + Affidavit
-                    </Button>
-                  )}
+              <>
+                <div className="paper-meta">
+                  <strong>REPUBLIC OF KENYA</strong>
+                  <span>IN THE {displayMatter.jurisdiction || displayMatter.division}</span>
+                  <span className="mono-text">{displayMatter.case_number}</span>
                 </div>
-              </div>
+                <div className="document-divider-title">
+                  {activeDocument?.title || activePacketItem?.title || "Draft document"}
+                </div>
+                <div className="draft-empty">
+                  <div className="draft-empty-inner">
+                    <h3 className="text-xl font-bold text-slate-900 mb-2">
+                      {isDrafting ? "Drafting in progress" : "No draft generated yet"}
+                    </h3>
+                    <p className="text-slate-500 mb-6">
+                      {isDrafting
+                        ? "The desk is preparing the motion and affidavit from masked matter facts."
+                        : "Generate the injunction packet to create the Notice of Motion and Supporting Affidavit."}
+                    </p>
+                    {!isDrafting && (
+                      <Button onClick={() => startDrafting()} size="lg" disabled={!matter}>
+                        Generate Motion + Affidavit
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </>
             )}
             {!activeContent && hasDocuments && activeDocumentType === "injunction_motion" && (
               <div className="draft-copy mt-6 text-slate-500">{buildFallbackMotion(displayMatter)}</div>

@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import String, Integer, ForeignKey, DateTime, Text, Float
+from sqlalchemy import String, Integer, ForeignKey, DateTime, Text, Float, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from src.models import Base
 
@@ -88,10 +88,40 @@ class DraftDocument(Base):
     document_type: Mapped[str] = mapped_column(String(80), index=True, nullable=False)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    editor_json: Mapped[dict | None] = mapped_column(JSON)
+    generated_editor_json: Mapped[dict | None] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(50), default="draft")
     error_status: Mapped[str | None] = mapped_column(String(80))
     revision_count: Mapped[int] = mapped_column(Integer, default=0)
+    edit_revision: Mapped[int] = mapped_column(Integer, default=0)
+    last_edited_at: Mapped[datetime | None] = mapped_column(DateTime)
+    last_edited_by: Mapped[int | None] = mapped_column(ForeignKey("user.id"))
     generated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     matter = relationship("Matter", back_populates="draft_documents")
+    revisions = relationship(
+        "DraftDocumentRevision",
+        back_populates="document",
+        cascade="all, delete-orphan",
+        order_by="DraftDocumentRevision.id",
+    )
+
+
+class DraftDocumentRevision(Base):
+    __tablename__ = "draft_document_revision"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    draft_document_id: Mapped[int] = mapped_column(
+        ForeignKey("draft_document.id"), index=True, nullable=False
+    )
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("user.id"), index=True)
+    revision_type: Mapped[str] = mapped_column(String(40), index=True, nullable=False)
+    edit_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    editor_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc), index=True
+    )
+
+    document = relationship("DraftDocument", back_populates="revisions")

@@ -2,15 +2,17 @@
 
 FastAPI server for the LegalDocs platform — domain-driven, async-first, and built around Kenyan legal data workflows.
 
-| Component | Technology |
-|-----------|-----------|
-| Framework | FastAPI 0.136 · Pydantic v2 · pydantic-settings |
-| Database | SQLAlchemy 2.0 (async) · SQLite via aiosqlite (dev) |
-| Auth | PyJWT · passlib (bcrypt) |
-| PII | OpenAI Privacy Filter (Hugging Face transformers) |
-| RAG | LangChain · LangGraph · Pinecone · OpenAI embeddings |
-| PDF Processing | PyMuPDF · pdfplumber |
-| Linting | Ruff (replaces black + isort + flake8) |
+
+| Component      | Technology                                           |
+| -------------- | ---------------------------------------------------- |
+| Framework      | FastAPI 0.136 · Pydantic v2 · pydantic-settings      |
+| Database       | SQLAlchemy 2.0 (async) · SQLite via aiosqlite (dev)  |
+| Auth           | PyJWT · passlib (bcrypt)                             |
+| PII            | OpenAI Privacy Filter (Hugging Face transformers)    |
+| RAG            | LangChain · LangGraph · Pinecone · OpenAI embeddings |
+| PDF Processing | PyMuPDF · pdfplumber                                 |
+| Linting        | Ruff (replaces black + isort + flake8)               |
+
 
 ---
 
@@ -88,20 +90,25 @@ Interactive Swagger docs: [http://localhost:8000/docs](http://localhost:8000/doc
 
 ### Authentication (`/api/auth`)
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/signup` | Register a new user |
-| `POST` | `/login` | Get a JWT access token (OAuth2 form) |
-| `GET` | `/me` | Get current authenticated user |
+
+| Method | Path      | Description                          |
+| ------ | --------- | ------------------------------------ |
+| `POST` | `/signup` | Register a new user                  |
+| `POST` | `/login`  | Get a JWT access token (OAuth2 form) |
+| `GET`  | `/me`     | Get current authenticated user       |
+
 
 ### PII Masking (`/api/pii`)
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/detect` | Detect PII entities for an authenticated user (returns spans + scores) |
-| `POST` | `/mask` | Matter-scoped PII masking; persists raw facts, masked facts, metadata, and workflow state |
+
+| Method | Path      | Description                                                                               |
+| ------ | --------- | ----------------------------------------------------------------------------------------- |
+| `POST` | `/detect` | Detect PII entities for an authenticated user (returns spans + scores)                    |
+| `POST` | `/mask`   | Matter-scoped PII masking; persists raw facts, masked facts, metadata, and workflow state |
+
 
 **Example — detect:**
+
 ```bash
 curl -X POST http://localhost:8000/api/pii/detect \
   -H "Content-Type: application/json" \
@@ -109,6 +116,7 @@ curl -X POST http://localhost:8000/api/pii/detect \
 ```
 
 **Response:**
+
 ```json
 {
   "entities": [
@@ -121,27 +129,31 @@ curl -X POST http://localhost:8000/api/pii/detect \
 
 ### Other Domains
 
-| Prefix | Domain | Description |
-|--------|--------|-------------|
-| `/api/matters` | Matters | Legal case CRUD, ownership checks, state transitions, activity timeline, citation verification |
-| `/api/drafting` | Drafting | Matter-scoped AI drafting from stored masked facts with safe error statuses |
-| `/api/admin` | Admin | System administration |
-| `/api/stats` | Dashboard | Aggregated statistics |
+
+| Prefix          | Domain    | Description                                                                                    |
+| --------------- | --------- | ---------------------------------------------------------------------------------------------- |
+| `/api/matters`  | Matters   | Legal case CRUD, ownership checks, state transitions, activity timeline, citation verification |
+| `/api/drafting` | Drafting  | Matter-scoped AI drafting from stored masked facts with safe error statuses                    |
+| `/api/admin`    | Admin     | System administration                                                                          |
+| `/api/stats`    | Dashboard | Aggregated statistics                                                                          |
+
 
 ### Kenya Law ELC Corpus
 
 The admin API includes an ELC-first Kenya Law ingestion path for civil litigation
 authorities:
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/admin/kenyalaw/ingestion-runs` | Discover, filter, fetch, and index Environment and Land Court judgments from Kenya Law |
-| `GET` | `/api/admin/kenyalaw/ingestion-runs/{run_id}` | Inspect ingestion status and counts |
-| `GET` | `/api/admin/kenyalaw/ingestion-runs/{run_id}/events` | Stream live ingestion events for the admin console |
-| `POST` | `/api/admin/kenyalaw/ingestion-runs/{run_id}/retry-failures` | Retry failed judgment URLs from an earlier run |
-| `GET` | `/api/admin/kenyalaw/corpus-stats` | Return indexed document, chunk, and failure counts |
-| `GET` | `/api/admin/kenyalaw/documents` | Search stored Kenya Law documents with status, topic, and pagination filters |
-| `GET` | `/api/admin/kenyalaw/documents/{document_id}` | Return readable document text, metadata, source URL, and stored chunks |
+
+| Method | Path                                                         | Description                                                                            |
+| ------ | ------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
+| `POST` | `/api/admin/kenyalaw/ingestion-runs`                         | Discover, filter, fetch, and index Environment and Land Court judgments from Kenya Law |
+| `GET`  | `/api/admin/kenyalaw/ingestion-runs/{run_id}`                | Inspect ingestion status and counts                                                    |
+| `GET`  | `/api/admin/kenyalaw/ingestion-runs/{run_id}/events`         | Stream live ingestion events for the admin console                                     |
+| `POST` | `/api/admin/kenyalaw/ingestion-runs/{run_id}/retry-failures` | Retry failed judgment URLs from an earlier run                                         |
+| `GET`  | `/api/admin/kenyalaw/corpus-stats`                           | Return indexed document, chunk, and failure counts                                     |
+| `GET`  | `/api/admin/kenyalaw/documents`                              | Search stored Kenya Law documents with status, topic, and pagination filters           |
+| `GET`  | `/api/admin/kenyalaw/documents/{document_id}`                | Return readable document text, metadata, source URL, and stored chunks                 |
+
 
 The default start URL is `https://new.kenyalaw.org/judgments/KEELC/`. Ingestion
 stores readable normalized text and keeps provenance metadata on every chunk so
@@ -159,33 +171,39 @@ Matter transitions are restricted to `created` -> `facts_entered` -> `pii_masked
 
 ### Global (`src/config.py`)
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ENVIRONMENT` | `local` | `local` · `staging` · `production` |
-| `DATABASE_URL` | `sqlite+aiosqlite:///./legal_docs.db` | Async database connection string |
-| `OPENAI_API_KEY` | — | **Required** for RAG embeddings |
-| `PINECONE_API_KEY` | — | **Required** for vector storage |
-| `PINECONE_INDEX_NAME` | `legal-docs` | Pinecone index name |
-| `CHUNK_SIZE` | `1500` | RAG text splitter chunk size |
-| `CHUNK_OVERLAP` | `150` | RAG text splitter overlap |
-| `SOURCES_DIR` | `sources` | Raw PDF input directory |
-| `OUTPUT_DIR` | `cleaned` | Cleaned .txt output directory |
+
+| Variable              | Default                               | Description                        |
+| --------------------- | ------------------------------------- | ---------------------------------- |
+| `ENVIRONMENT`         | `local`                               | `local` · `staging` · `production` |
+| `DATABASE_URL`        | `sqlite+aiosqlite:///./legal_docs.db` | Async database connection string   |
+| `OPENAI_API_KEY`      | —                                     | **Required** for RAG embeddings    |
+| `PINECONE_API_KEY`    | —                                     | **Required** for vector storage    |
+| `PINECONE_INDEX_NAME` | `legal-docs`                          | Pinecone index name                |
+| `CHUNK_SIZE`          | `1500`                                | RAG text splitter chunk size       |
+| `CHUNK_OVERLAP`       | `150`                                 | RAG text splitter overlap          |
+| `SOURCES_DIR`         | `sources`                             | Raw PDF input directory            |
+| `OUTPUT_DIR`          | `cleaned`                             | Cleaned .txt output directory      |
+
 
 ### Auth (`src/auth/config.py` — prefix `AUTH_`)
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `AUTH_JWT_SECRET` | `super-secret-dev-key` | JWT signing secret (**change in production**) |
-| `AUTH_JWT_ALG` | `HS256` | JWT signing algorithm |
-| `AUTH_JWT_EXP_MINUTES` | `1440` | Token expiration (24 hours) |
+
+| Variable               | Default                | Description                                   |
+| ---------------------- | ---------------------- | --------------------------------------------- |
+| `AUTH_JWT_SECRET`      | `super-secret-dev-key` | JWT signing secret (**change in production**) |
+| `AUTH_JWT_ALG`         | `HS256`                | JWT signing algorithm                         |
+| `AUTH_JWT_EXP_MINUTES` | `1440`                 | Token expiration (24 hours)                   |
+
 
 ### PII (`src/pii/config.py` — prefix `PII_`)
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PII_MODEL_NAME` | `openai/privacy-filter` | Hugging Face model identifier |
-| `PII_DEVICE` | `cpu` | Inference device (`cpu` or `cuda`) |
-| `PII_CONFIDENCE_THRESHOLD` | `0.5` | Minimum confidence to report an entity |
+
+| Variable                   | Default                 | Description                            |
+| -------------------------- | ----------------------- | -------------------------------------- |
+| `PII_MODEL_NAME`           | `openai/privacy-filter` | Hugging Face model identifier          |
+| `PII_DEVICE`               | `cpu`                   | Inference device (`cpu` or `cuda`)     |
+| `PII_CONFIDENCE_THRESHOLD` | `0.5`                   | Minimum confidence to report an entity |
+
 
 ---
 
@@ -206,16 +224,18 @@ python scripts/run_cleaner.py --sources-dir /data/pdfs --output-dir /data/clean
 
 The cleaner applies **8 sequential passes**:
 
-| # | Pass | Example noise removed |
-|---|------|-----------------------|
-| 1 | Strip URLs | `http://www.kenyalaw.org` |
-| 2 | Strip page numbers | `Page 3 of 14`, `– 3 –` |
-| 3 | Strip eKLR boilerplate | `Kenya Law Reports`, `National Council for Law Reporting` |
-| 4 | Strip case-number stamps | `ELC Case No. 123 of 2022` |
-| 5 | Strip legislation headers | `Rev. Edition 2009`, `Cap. 21` |
-| 6 | Remove invisible Unicode | Zero-width spaces, BOMs, soft hyphens |
-| 7 | NFC Unicode normalisation | Compose diacritics, canonical ordering |
-| 8 | Collapse whitespace | Multiple spaces → 1, 3+ newlines → paragraph break |
+
+| #   | Pass                      | Example noise removed                                     |
+| --- | ------------------------- | --------------------------------------------------------- |
+| 1   | Strip URLs                | `http://www.kenyalaw.org`                                 |
+| 2   | Strip page numbers        | `Page 3 of 14`, `– 3 –`                                   |
+| 3   | Strip eKLR boilerplate    | `Kenya Law Reports`, `National Council for Law Reporting` |
+| 4   | Strip case-number stamps  | `ELC Case No. 123 of 2022`                                |
+| 5   | Strip legislation headers | `Rev. Edition 2009`, `Cap. 21`                            |
+| 6   | Remove invisible Unicode  | Zero-width spaces, BOMs, soft hyphens                     |
+| 7   | NFC Unicode normalisation | Compose diacritics, canonical ordering                    |
+| 8   | Collapse whitespace       | Multiple spaces → 1, 3+ newlines → paragraph break        |
+
 
 ### RAG Ingestion (Pinecone)
 
