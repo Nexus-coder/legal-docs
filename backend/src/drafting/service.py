@@ -27,7 +27,9 @@ from src.drafting.packets import (
     canonical_subcategory,
     default_pleading_type,
     drafting_packet_for,
+    selected_document_specs,
     supported_subcategories,
+    unsupported_document_types,
 )
 from src.drafting.schemas import DraftingEventRead, DraftingRequest, GeneratedBlock
 from src.matters import service as matters_service
@@ -119,6 +121,7 @@ async def create_drafting_run(
         jurisdiction=request.jurisdiction or matter.jurisdiction or matter.division,
         subcategory=subcategory,
         pleading_type=request.pleading_type or default_pleading_type(subcategory),
+        selected_document_types=request.selected_document_types,
     )
     db.add(run)
     await db.commit()
@@ -581,6 +584,7 @@ async def execute_drafting_run(db: AsyncSession, run_id: int) -> DraftingRun | N
         ),
         pleading_type=run.pleading_type
         or default_pleading_type(run.subcategory or matter.subcategory),
+        selected_document_types=run.selected_document_types,
     )
     instructions = matter.masked_facts
 
@@ -610,6 +614,29 @@ async def execute_drafting_run(db: AsyncSession, run_id: int) -> DraftingRun | N
                 f"Supported subcategories: {', '.join(sorted(supported_subcategories()))}."
             ),
         )
+    unsupported = unsupported_document_types(packet, request.selected_document_types)
+    if unsupported:
+        return await _fail_run(
+            db,
+            run,
+            matter,
+            stage="select_packet",
+            error_status="unsupported_document_type",
+            message=(
+                "Drafting packet does not include the selected document types: "
+                f"{', '.join(sorted(unsupported))}."
+            ),
+        )
+    packet_documents = selected_document_specs(packet, request.selected_document_types)
+    if not packet_documents:
+        return await _fail_run(
+            db,
+            run,
+            matter,
+            stage="select_packet",
+            error_status="empty_document_selection",
+            message="No drafting documents were selected for generation.",
+        )
 
     try:
         await record_event(
@@ -630,7 +657,7 @@ async def execute_drafting_run(db: AsyncSession, run_id: int) -> DraftingRun | N
         documents = []
         retrieved_contexts: list[dict[str, Any]] = []
         response_error_status = None
-        for spec in packet.documents:
+        for spec in packet_documents:
             await record_event(
                 db,
                 run,

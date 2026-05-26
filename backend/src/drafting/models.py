@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, String, Text
+from sqlalchemy import JSON, DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.models import Base
@@ -16,6 +16,7 @@ class DraftingRun(Base):
     jurisdiction: Mapped[str | None] = mapped_column(String(150))
     subcategory: Mapped[str | None] = mapped_column(String(150))
     pleading_type: Mapped[str | None] = mapped_column(String(180))
+    selected_document_types: Mapped[list[str] | None] = mapped_column(JSON)
     error_status: Mapped[str | None] = mapped_column(String(80))
     started_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime)

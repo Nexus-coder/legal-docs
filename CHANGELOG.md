@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0.0] - 2026-05-26
+
+### Added
+
+- Advocates can now review the recommended filing packet before drafting and include optional documents such as certificates of urgency, draft orders, written submissions, witness statements, and lists of documents.
+- Drafting packets now expose backend metadata for required and optional documents so the workspace can show the correct packet for each matter type.
+- Drafting runs now persist the selected document types and reject unsupported selections before invoking the legal drafting agent.
+
+### Changed
+
+- The drafting workspace now waits for the advocate to choose optional documents instead of auto-starting generation as soon as masked facts load.
+- Generation progress now follows the selected packet dynamically, including optional documents selected for that run.
+
 ## [0.2.1.0] - 2026-05-26
 
 ### Changed

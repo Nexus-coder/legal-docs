@@ -142,6 +142,7 @@ def _backfill_drafting_run_columns(sync_conn):
     }
     additions = {
         "pleading_type": "VARCHAR(180)",
+        "selected_document_types": "JSON",
     }
     for name, ddl in additions.items():
         if name not in columns:

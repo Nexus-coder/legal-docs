@@ -12,18 +12,54 @@ from src.drafting import service as drafting_service
 from src.drafting.schemas import (
     DraftDocumentSaveRequest,
     DraftDocumentSaveResponse,
+    DraftingPacketDocumentRead,
+    DraftingPacketRead,
     DraftingRequest,
     DraftingResponse,
     DraftingRunRead,
     GeneratedBlock,
 )
-from src.drafting.packets import canonical_subcategory, default_pleading_type
+from src.drafting.packets import canonical_subcategory, default_pleading_type, drafting_packet_for
 from src.matters import service as matters_service
 
 router = APIRouter()
 
 _classify_drafting_error = drafting_service._classify_drafting_error
 _drafting_status_from_state = drafting_service._drafting_status_from_state
+
+
+@router.get("/packet", response_model=DraftingPacketRead)
+async def get_drafting_packet(
+    current_user: Annotated[UserRead, Depends(get_current_user)],
+    subcategory: str | None = None,
+    pleading_type: str | None = None,
+):
+    del current_user
+    resolved_subcategory = canonical_subcategory(subcategory or "Temporary Injunction")
+    resolved_pleading_type = pleading_type or default_pleading_type(resolved_subcategory)
+    packet = drafting_packet_for(
+        subcategory=resolved_subcategory,
+        pleading_type=resolved_pleading_type,
+    )
+    if packet is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="unsupported_subcategory",
+        )
+    return DraftingPacketRead(
+        subcategory=packet.subcategory,
+        pleading_type=packet.pleading_type,
+        documents=[
+            DraftingPacketDocumentRead(
+                document_type=document.document_type,
+                title=document.title,
+                activity_title=document.activity_title,
+                required=document.required,
+                selected_by_default=document.required,
+            )
+            for document in packet.documents
+        ],
+    )
 
 
 @router.post(
