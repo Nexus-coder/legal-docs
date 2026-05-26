@@ -100,6 +100,16 @@ const PACKET_DOCUMENTS: PacketDocument[] = [
   },
 ];
 
+function packetDocumentsFor(draftDocuments: DraftDocument[]): PacketDocument[] {
+  if (!draftDocuments.length) return PACKET_DOCUMENTS;
+  return draftDocuments.map((document) => ({
+    document_type: document.document_type,
+    title: document.title,
+    subtitle: document.content ? "Generated from masked facts" : "Awaiting generated content",
+    enabled: true,
+  }));
+}
+
 const GENERATION_STEPS = [
   "Reading masked facts",
   "Searching Kenyan authorities",
@@ -451,6 +461,21 @@ function DraftingWorkspaceContent() {
     });
   }, []);
 
+  const packetDocuments = useMemo(
+    () => packetDocumentsFor(matter?.draft_documents || []),
+    [matter?.draft_documents],
+  );
+
+  useEffect(() => {
+    if (!packetDocuments.length) return;
+    const activeStillExists = packetDocuments.some(
+      (document) => document.document_type === activeDocumentType,
+    );
+    if (!activeStillExists) {
+      setActiveDocumentType(packetDocuments[0].document_type);
+    }
+  }, [activeDocumentType, packetDocuments]);
+
   if (!matterId) {
     return (
       <section className="p-8">
@@ -468,7 +493,7 @@ function DraftingWorkspaceContent() {
   const displayMatter = matter ?? placeholderMatter(matterId);
   const documents = displayMatter.draft_documents || [];
   const activeDocument = documents.find((document) => document.document_type === activeDocumentType);
-  const activePacketItem = PACKET_DOCUMENTS.find((document) => document.document_type === activeDocumentType);
+  const activePacketItem = packetDocuments.find((document) => document.document_type === activeDocumentType);
   const hasDocuments = documents.some((document) => document.content);
   const isDrafting = loading || generating || connection === "connecting" || connection === "live" || connection === "reconnecting";
   const activeGenerationStep = activeStepFromEvents(events, hasDocuments, connection, loading);
@@ -485,7 +510,7 @@ function DraftingWorkspaceContent() {
       <header className="drafting-topbar">
         <div>
           <div className="drafting-breadcrumbs">Matters / {displayMatter.case_number} / Drafting</div>
-          <h1 className="drafting-title">Temporary injunction drafting desk</h1>
+          <h1 className="drafting-title">Legal drafting desk</h1>
         </div>
         <div className="topbar-status-group">
           <span className={`status-badge ${connectionClass(connection, loading)}`}>
@@ -526,7 +551,7 @@ function DraftingWorkspaceContent() {
           <div className="drafting-rail-section">
             <CardLabel className="mb-4">Filing packet</CardLabel>
             <div className="packet-list">
-              {PACKET_DOCUMENTS.map((document, index) => {
+              {packetDocuments.map((document, index) => {
                 const draftDocument = documents.find((item) => item.document_type === document.document_type);
                 const isActive = activeDocumentType === document.document_type;
                 return (
@@ -660,12 +685,12 @@ function DraftingWorkspaceContent() {
                     </h3>
                     <p className="text-slate-500 mb-6">
                       {isDrafting
-                        ? "The desk is preparing the motion and affidavit from masked matter facts."
-                        : "Generate the injunction packet to create the Notice of Motion and Supporting Affidavit."}
+                        ? "The desk is preparing the drafting packet from masked matter facts."
+                        : "Generate the drafting packet for this matter."}
                     </p>
                     {!isDrafting && (
                       <Button onClick={() => startDrafting()} size="lg" disabled={!matter}>
-                        Generate Motion + Affidavit
+                        Generate Draft Packet
                       </Button>
                     )}
                   </div>
@@ -784,6 +809,7 @@ function readableDraftingError(errorStatus: string) {
   const labels: Record<string, string> = {
     empty_context: "No masked matter facts were available for drafting.",
     retrieval_failed: "Kenyan authority retrieval failed. Retry the run before relying on the draft.",
+    unsupported_subcategory: "This matter type is not configured for automated drafting yet.",
     model_failed: "The drafting model did not complete. Retry when the model is available.",
     max_revisions_failed: "Draft generated, but the critique loop reached its revision limit. Review the draft manually before relying on it.",
     malformed_output: "Drafting finished with an unreadable model output.",

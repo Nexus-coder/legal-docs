@@ -4,6 +4,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from src.ingestion.indexer import retrieve_context
+from src.kenyalaw.service import PINECONE_NAMESPACE
 from src.config import settings
 
 
@@ -23,7 +24,7 @@ llm = ChatOpenAI(model="gpt-4o", temperature=0, api_key=settings.OPENAI_API_KEY)
 def retrieve_node(state: AgentState) -> dict:
     req = state["request"]
     query = f"{req.get('subcategory', '')} in {req.get('jurisdiction', '')}. {req.get('instructions', '')}"
-    context = retrieve_context(query)
+    context = retrieve_context(query, namespace=PINECONE_NAMESPACE)
     return {"context": context}
 
 

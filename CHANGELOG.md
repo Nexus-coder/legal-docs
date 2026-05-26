@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.0.0] - 2026-05-26
+
+### Added
+
+- Drafting packets for adverse possession, trespass/eviction, boundary/title disputes, and procedural applications, with document instructions matched to each pleading type.
+- A drafting evaluation dataset and Ragas-compatible runner for measuring retrieval coverage, authority ranking, checklist fit, and negative-control behavior.
+- Matter-scoped citation provenance from retrieved Kenya Law authorities, including source URLs, neutral citations, judgment metadata, confidence breakdowns, and inline editor citation anchors.
+
+### Changed
+
+- Drafting requests can now default jurisdiction, subcategory, and pleading type from the matter while still preserving the selected packet on drafting runs.
+- Draft generation now uses the Kenya Law ELC vector namespace and fails safely when no authority context is retrieved.
+- The drafting workspace now renders filing packet documents from the generated backend documents instead of assuming every matter is a temporary injunction packet.
+
+### Fixed
+
+- Regenerated drafts no longer fail authority grounding because retrieval queried the wrong Pinecone namespace.
+- Unsupported drafting categories now return a readable workspace error instead of exposing a raw backend status.
+
 ## [0.1.0.0] - 2026-05-25
 
 ### Added

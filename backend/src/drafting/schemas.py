@@ -9,8 +9,9 @@ from src.matters.schemas import DraftDocumentRead
 
 class DraftingRequest(CustomBaseModel):
     matter_id: int
-    jurisdiction: str
-    subcategory: str
+    jurisdiction: str | None = None
+    subcategory: str | None = None
+    pleading_type: str | None = None
     instructions: str | None = None
 
 
@@ -37,6 +38,7 @@ class DraftingRunRead(CustomBaseModel):
     status: str
     jurisdiction: str | None = None
     subcategory: str | None = None
+    pleading_type: str | None = None
     error_status: str | None = None
     started_at: datetime
     finished_at: datetime | None = None
