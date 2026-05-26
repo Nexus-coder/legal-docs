@@ -15,6 +15,7 @@ class DraftingRun(Base):
     status: Mapped[str] = mapped_column(String(40), default="running", index=True)
     jurisdiction: Mapped[str | None] = mapped_column(String(150))
     subcategory: Mapped[str | None] = mapped_column(String(150))
+    pleading_type: Mapped[str | None] = mapped_column(String(180))
     error_status: Mapped[str | None] = mapped_column(String(80))
     started_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime)

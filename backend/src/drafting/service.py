@@ -1,7 +1,11 @@
 import asyncio
+import json
 import logging
+import re
 from collections.abc import AsyncIterator
+from copy import deepcopy
 from datetime import datetime, timezone
+from typing import Any
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -18,6 +22,13 @@ from src.drafting.editor import (
     validate_editor_json,
 )
 from src.drafting.models import DraftingEvent, DraftingRun
+from src.drafting.packets import (
+    INJUNCTION_PACKET,
+    canonical_subcategory,
+    default_pleading_type,
+    drafting_packet_for,
+    supported_subcategories,
+)
 from src.drafting.schemas import DraftingEventRead, DraftingRequest, GeneratedBlock
 from src.matters import service as matters_service
 from src.matters.models import CitationEvidence, DraftDocument, DraftDocumentRevision, Matter
@@ -28,28 +39,12 @@ TERMINAL_RUN_STATUSES = {"completed", "failed"}
 
 INJUNCTION_DRAFT_DOCUMENTS = [
     {
-        "document_type": "injunction_motion",
-        "title": "Notice of Motion for Temporary Injunction",
-        "activity_title": "Drafting Notice of Motion",
-        "instruction": (
-            "Draft a Notice of Motion for temporary injunction in an Environment and "
-            "Land Court matter. Include the court heading, certificate-style urgency "
-            "context only if the facts justify it, prayers, grounds, and a concise "
-            "legal basis tied to the supplied facts and retrieved Kenyan authorities."
-        ),
-    },
-    {
-        "document_type": "supporting_affidavit",
-        "title": "Supporting Affidavit",
-        "activity_title": "Drafting Supporting Affidavit",
-        "instruction": (
-            "Draft a Supporting Affidavit for the temporary injunction application. "
-            "Use numbered deposition paragraphs, preserve a clear fact chronology, "
-            "identify anonymized parties and land references, refer to exhibits only "
-            "when supported by the facts, and avoid legal argument that belongs in "
-            "submissions or grounds."
-        ),
-    },
+        "document_type": spec.document_type,
+        "title": spec.title,
+        "activity_title": spec.activity_title,
+        "instruction": spec.instruction,
+    }
+    for spec in INJUNCTION_PACKET.documents
 ]
 
 
@@ -111,12 +106,16 @@ async def create_drafting_run(
     matter: Matter,
     request: DraftingRequest,
 ) -> DraftingRun:
+    subcategory = canonical_subcategory(
+        request.subcategory or matter.subcategory or "Temporary Injunction"
+    )
     run = DraftingRun(
         matter_id=matter.id,
         user_id=matter.user_id,
         status="running",
         jurisdiction=request.jurisdiction or matter.jurisdiction or matter.division,
-        subcategory=request.subcategory or matter.subcategory or "Temporary Injunction",
+        subcategory=subcategory,
+        pleading_type=request.pleading_type or default_pleading_type(subcategory),
     )
     db.add(run)
     await db.commit()
@@ -250,6 +249,260 @@ async def _matter_evidence_ids(db: AsyncSession, matter_id: int) -> set[int]:
     return set(result.scalars().all())
 
 
+def _retrieved_contexts_from_state(final_state: dict) -> list[dict[str, Any]]:
+    contexts = final_state.get("context") or []
+    return [context for context in contexts if isinstance(context, dict)]
+
+
+def _evidence_items_from_contexts(
+    contexts: list[dict[str, Any]],
+    *,
+    draft_content: str,
+    max_items: int = 8,
+) -> list[dict[str, Any]]:
+    evidence_items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for context in sorted(
+        contexts,
+        key=lambda item: float(item.get("score") or 0.0),
+        reverse=True,
+    ):
+        metadata = dict(context.get("metadata") or {})
+        title = _metadata_value(metadata, "title", "canonical_title")
+        source_url = _metadata_value(metadata, "source_url", "canonical_url", "url")
+        identity = source_url or title
+        if not identity or identity in seen:
+            continue
+        seen.add(identity)
+
+        score = max(0.0, min(1.0, float(context.get("score") or 0.0)))
+        cited = _authority_appears_in_draft(draft_content, metadata)
+        confidence = round((score * 0.8) + (0.2 if cited else 0.0), 4)
+        evidence_items.append(
+            {
+                "citation_type": "precedent",
+                "title": title or "Retrieved Kenya Law authority",
+                "source": _metadata_value(metadata, "source") or "Kenya Law",
+                "source_url": source_url,
+                "neutral_citation": _metadata_value(metadata, "neutral_citation"),
+                "court": _metadata_value(metadata, "court"),
+                "judgment_date": _metadata_value(metadata, "judgment_date"),
+                "snippet": _bounded_context_snippet(str(context.get("text") or "")),
+                "confidence": confidence,
+                "confidence_breakdown": json.dumps(
+                    {
+                        "retrieval_score": round(score, 4),
+                        "cited_in_draft": cited,
+                        "source_url_present": bool(source_url),
+                    }
+                ),
+                "status": "pending" if cited else "needs_review",
+            }
+        )
+        if len(evidence_items) >= max_items:
+            break
+    return evidence_items
+
+
+def _metadata_value(metadata: dict[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        value = metadata.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return None
+
+
+def _authority_appears_in_draft(draft_content: str, metadata: dict[str, Any]) -> bool:
+    draft_lower = (draft_content or "").lower()
+    for key in ("neutral_citation", "title"):
+        value = _metadata_value(metadata, key)
+        if not value:
+            continue
+        lowered = value.lower()
+        if len(lowered) >= 8 and lowered in draft_lower:
+            return True
+        title_prefix = re.split(r"\s+\(", lowered, maxsplit=1)[0].strip()
+        if len(title_prefix) >= 12 and title_prefix in draft_lower:
+            return True
+    return False
+
+
+def _bounded_context_snippet(text: str, limit: int = 700) -> str:
+    usable_text = _strip_index_metadata(text)
+    paragraphs = [
+        re.sub(r"\s+", " ", paragraph).strip()
+        for paragraph in re.split(r"\n\s*\n", usable_text)
+        if paragraph.strip()
+    ]
+    snippet = next((paragraph for paragraph in paragraphs if len(paragraph) >= 80), "")
+    if not snippet and paragraphs:
+        snippet = paragraphs[0]
+    if not snippet:
+        snippet = "Retrieved authority did not include readable text content."
+    return snippet[:limit]
+
+
+def _strip_index_metadata(text: str) -> str:
+    normalized = (text or "").replace("\r\n", "\n")
+    lines = []
+    for line in normalized.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("# "):
+            continue
+        if re.match(
+            r"^(source|source_url|canonical_url|title|neutral_citation|court|"
+            r"judgment_date|topic_tags|source_document_url|source_format|"
+            r"extraction_status|text_quality_score|document_hash|corpus_scope):\s*",
+            stripped,
+            flags=re.IGNORECASE,
+        ):
+            continue
+        lines.append(stripped)
+    return "\n\n".join(lines).strip()
+
+
+def _link_documents_to_evidence(
+    documents: list[DraftDocument],
+    evidence_items: list[CitationEvidence],
+) -> None:
+    for document in documents:
+        if not document.content:
+            continue
+        editor_json = text_to_editor_json(document.content)
+        linked_json = _link_editor_json_to_evidence(editor_json, evidence_items)
+        document.editor_json = linked_json
+        document.generated_editor_json = linked_json
+
+
+def _link_editor_json_to_evidence(
+    editor_json: dict[str, Any],
+    evidence_items: list[CitationEvidence],
+) -> dict[str, Any]:
+    labels = _citation_labels(evidence_items)
+    if not labels:
+        return editor_json
+
+    linked = deepcopy(editor_json)
+    _link_editor_node(linked, labels)
+    return linked
+
+
+def _citation_labels(
+    evidence_items: list[CitationEvidence],
+) -> list[tuple[str, int]]:
+    labels: list[tuple[str, int]] = []
+    for evidence in evidence_items:
+        for value in (evidence.neutral_citation, evidence.title):
+            if value and len(value.strip()) >= 8:
+                labels.append((value.strip(), evidence.id))
+        title_prefix = re.split(r"\s+\(", evidence.title or "", maxsplit=1)[0].strip()
+        if len(title_prefix) >= 12:
+            labels.append((title_prefix, evidence.id))
+
+    deduped: dict[str, int] = {}
+    for label, evidence_id in labels:
+        deduped.setdefault(label.lower(), evidence_id)
+    return sorted(
+        ((label, evidence_id) for label, evidence_id in deduped.items()),
+        key=lambda item: len(item[0]),
+        reverse=True,
+    )
+
+
+def _link_editor_node(node: dict[str, Any], labels: list[tuple[str, int]]) -> None:
+    if node.get("type") == "text":
+        replacement = _linked_text_nodes(node, labels)
+        if len(replacement) == 1 and replacement[0] is node:
+            return
+        node.clear()
+        node.update(replacement[0])
+        node["_split_remainder"] = replacement[1:]
+        return
+
+    content = node.get("content") or []
+    linked_content = []
+    for child in content:
+        if not isinstance(child, dict):
+            linked_content.append(child)
+            continue
+        _link_editor_node(child, labels)
+        remainder = child.pop("_split_remainder", [])
+        linked_content.append(child)
+        linked_content.extend(remainder)
+    if linked_content:
+        node["content"] = linked_content
+
+
+def _linked_text_nodes(
+    node: dict[str, Any],
+    labels: list[tuple[str, int]],
+) -> list[dict[str, Any]]:
+    text = node.get("text", "")
+    if not isinstance(text, str) or not text:
+        return [node]
+
+    parts: list[dict[str, Any]] = []
+    cursor = 0
+    lower_text = text.lower()
+    while cursor < len(text):
+        match = _next_citation_match(lower_text, cursor, labels)
+        if match is None:
+            parts.append(_copy_text_node(node, text[cursor:]))
+            break
+        start, end, evidence_id = match
+        if start > cursor:
+            parts.append(_copy_text_node(node, text[cursor:start]))
+        parts.append(
+            _copy_text_node(
+                node,
+                text[start:end],
+                citation_evidence_id=evidence_id,
+            )
+        )
+        cursor = end
+
+    return [part for part in parts if part.get("text")] or [node]
+
+
+def _next_citation_match(
+    lower_text: str,
+    cursor: int,
+    labels: list[tuple[str, int]],
+) -> tuple[int, int, int] | None:
+    best: tuple[int, int, int] | None = None
+    for label, evidence_id in labels:
+        start = lower_text.find(label, cursor)
+        if start < 0:
+            continue
+        end = start + len(label)
+        candidate = (start, end, evidence_id)
+        if best is None or candidate[0] < best[0] or (
+            candidate[0] == best[0] and candidate[1] > best[1]
+        ):
+            best = candidate
+    return best
+
+
+def _copy_text_node(
+    source: dict[str, Any],
+    text: str,
+    *,
+    citation_evidence_id: int | None = None,
+) -> dict[str, Any]:
+    copied = {"type": "text", "text": text}
+    marks = deepcopy(source.get("marks") or [])
+    if citation_evidence_id is not None:
+        marks.append(
+            {
+                "type": "citationRef",
+                "attrs": {"evidenceId": citation_evidence_id},
+            }
+        )
+    if marks:
+        copied["marks"] = marks
+    return copied
+
+
 async def _refresh_matter_draft_content(db: AsyncSession, matter_id: int) -> None:
     result = await db.execute(
         select(DraftDocument)
@@ -320,7 +573,11 @@ async def execute_drafting_run(db: AsyncSession, run_id: int) -> DraftingRun | N
     request = DraftingRequest(
         matter_id=matter.id,
         jurisdiction=run.jurisdiction or matter.jurisdiction or matter.division,
-        subcategory=run.subcategory or matter.subcategory or "Temporary Injunction",
+        subcategory=canonical_subcategory(
+            run.subcategory or matter.subcategory or "Temporary Injunction"
+        ),
+        pleading_type=run.pleading_type
+        or default_pleading_type(run.subcategory or matter.subcategory),
     )
     instructions = matter.masked_facts
 
@@ -332,6 +589,23 @@ async def execute_drafting_run(db: AsyncSession, run_id: int) -> DraftingRun | N
             stage="read_facts",
             error_status="empty_context",
             message="No masked matter facts were available for drafting.",
+        )
+
+    packet = drafting_packet_for(
+        subcategory=request.subcategory,
+        pleading_type=request.pleading_type,
+    )
+    if packet is None:
+        return await _fail_run(
+            db,
+            run,
+            matter,
+            stage="select_packet",
+            error_status="unsupported_subcategory",
+            message=(
+                "Drafting is not configured for this subcategory and pleading type. "
+                f"Supported subcategories: {', '.join(sorted(supported_subcategories()))}."
+            ),
         )
 
     try:
@@ -351,29 +625,31 @@ async def execute_drafting_run(db: AsyncSession, run_id: int) -> DraftingRun | N
         )
 
         documents = []
+        retrieved_contexts: list[dict[str, Any]] = []
         response_error_status = None
-        for spec in INJUNCTION_DRAFT_DOCUMENTS:
+        for spec in packet.documents:
             await record_event(
                 db,
                 run,
                 "drafting_document",
-                spec["document_type"],
-                spec["activity_title"],
-                document_type=spec["document_type"],
+                spec.document_type,
+                spec.activity_title,
+                document_type=spec.document_type,
             )
             initial_state = _build_initial_state(
                 request,
                 matter_instructions=instructions,
-                document_instruction=spec["instruction"],
+                document_instruction=spec.instruction,
             )
             final_state = legal_agent.invoke(initial_state)
+            retrieved_contexts.extend(_retrieved_contexts_from_state(final_state))
             await record_event(
                 db,
                 run,
                 "running_critique",
                 "critique",
-                f"Running critique for {spec['title']}.",
-                document_type=spec["document_type"],
+                f"Running critique for {spec.title}.",
+                document_type=spec.document_type,
             )
 
             draft = final_state.get("draft", "")
@@ -386,8 +662,8 @@ async def execute_drafting_run(db: AsyncSession, run_id: int) -> DraftingRun | N
             document = await matters_service.upsert_draft_document(
                 db,
                 matter,
-                document_type=spec["document_type"],
-                title=spec["title"],
+                document_type=spec.document_type,
+                title=spec.title,
                 content=draft,
                 status=_document_status(final_state, error_status),
                 error_status=error_status,
@@ -406,13 +682,13 @@ async def execute_drafting_run(db: AsyncSession, run_id: int) -> DraftingRun | N
                 db,
                 run,
                 "document_ready" if draft else "document_failed",
-                spec["document_type"],
+                spec.document_type,
                 (
-                    f"{spec['title']} is ready for advocate review."
+                    f"{spec.title} is ready for advocate review."
                     if draft
-                    else f"{spec['title']} could not be drafted from the model output."
+                    else f"{spec.title} could not be drafted from the model output."
                 ),
-                document_type=spec["document_type"],
+                document_type=spec.document_type,
                 error_type=error_status,
             )
 
@@ -429,20 +705,22 @@ async def execute_drafting_run(db: AsyncSession, run_id: int) -> DraftingRun | N
 
         matter.jurisdiction = request.jurisdiction or matter.jurisdiction
         matter.subcategory = request.subcategory or matter.subcategory
-        await matters_service.upsert_citation_evidence(
-            db,
-            matter,
-            [
-                {
-                    "citation_type": "precedent",
-                    "title": "Giella v. Cassman Brown & Co. Ltd [1973] EA 358",
-                    "source": "eKLR reference corpus",
-                    "snippet": "The conditions for grant of an interlocutory injunction include a prima facie case, irreparable injury, and balance of convenience.",
-                    "confidence": 0.94,
-                    "status": "pending",
-                }
-            ],
+        evidence_items = _evidence_items_from_contexts(
+            retrieved_contexts,
+            draft_content=matter.draft_content or "",
         )
+        if not evidence_items:
+            return await _fail_run(
+                db,
+                run,
+                matter,
+                stage="authorities",
+                error_status="retrieval_failed",
+                message="Drafting did not retrieve any authority context to ground the draft.",
+            )
+        evidence = await matters_service.upsert_citation_evidence(db, matter, evidence_items)
+        await db.flush()
+        _link_documents_to_evidence(documents, evidence)
         if matter.workflow_state == "pii_masked":
             await matters_service.transition_matter(
                 db,

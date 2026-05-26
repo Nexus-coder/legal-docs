@@ -2,6 +2,7 @@ import unittest
 import zipfile
 from datetime import datetime, timezone
 from io import BytesIO
+from unittest.mock import patch
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -16,6 +17,7 @@ from src.drafting.editor import validate_editor_json
 from src.drafting.router import _classify_drafting_error, _drafting_status_from_state
 from src.drafting.schemas import DraftingRequest
 from src.drafting import service as drafting_service
+from src.agent.graph import retrieve_node
 from src.ingestion.indexer import (
     PineconeDimensionMismatch,
     embedding_safe_nodes,
@@ -615,7 +617,29 @@ class MatterWorkflowTests(unittest.IsolatedAsyncioTestCase):
                     else "Notice of Motion"
                 )
                 return {
-                    "draft": f"{title} draft from masked facts.",
+                    "draft": (
+                        f"{title} draft from masked facts relying on "
+                        "Ngure v Kiragu [2026] KEELC 2847."
+                    ),
+                    "context": [
+                        {
+                            "text": (
+                                "# Ngure v Kiragu\n\n"
+                                "title: Ngure v Kiragu\n"
+                                "source_url: https://new.kenyalaw.org/ngure\n\n"
+                                "The court considered temporary injunction principles."
+                            ),
+                            "metadata": {
+                                "title": "Ngure v Kiragu",
+                                "source": "Kenya Law",
+                                "source_url": "https://new.kenyalaw.org/ngure",
+                                "neutral_citation": "[2026] KEELC 2847",
+                                "court": "Environment and Land Court",
+                                "judgment_date": "2026-05-14",
+                            },
+                            "score": 0.91,
+                        }
+                    ],
                     "feedback": "PASS",
                     "revision_count": 1,
                     "passed_critique": True,
@@ -648,6 +672,24 @@ class MatterWorkflowTests(unittest.IsolatedAsyncioTestCase):
 
                 self.assertEqual(completed.status, "completed")
                 self.assertEqual(matter.workflow_state, "draft_generated")
+                refreshed = await service.get_user_matter(
+                    db, user_id=user.id, matter_id=matter.id, include_related=True
+                )
+                self.assertEqual(refreshed.citation_evidence[0].title, "Ngure v Kiragu")
+                self.assertEqual(
+                    refreshed.citation_evidence[0].source_url,
+                    "https://new.kenyalaw.org/ngure",
+                )
+                linked_marks = [
+                    mark
+                    for document in refreshed.draft_documents
+                    for block in (document.editor_json or {}).get("content", [])
+                    for node in block.get("content", [])
+                    for mark in node.get("marks", [])
+                ]
+                self.assertTrue(
+                    any(mark.get("type") == "citationRef" for mark in linked_marks)
+                )
 
             chunks = []
             async for chunk in drafting_service.stream_drafting_events(
@@ -663,6 +705,100 @@ class MatterWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 stream_payload.index('"event_type":"started"'),
                 stream_payload.index('"event_type":"completed"'),
             )
+        finally:
+            drafting_service.legal_agent = original_agent
+
+    async def test_non_injunction_subcategory_uses_packet_and_retrieved_evidence(self):
+        class FakeLegalAgent:
+            def invoke(self, state):
+                is_affidavit = "Supporting Affidavit" in state["request"]["instructions"]
+                title = (
+                    "Supporting Affidavit for Adverse Possession"
+                    if is_affidavit
+                    else "Originating Summons for Adverse Possession"
+                )
+                return {
+                    "draft": (
+                        f"{title} grounded in Wambugu v Njuguna [1983] KLR 172."
+                    ),
+                    "context": [
+                        {
+                            "text": (
+                                "# Wambugu v Njuguna\n\n"
+                                "source_url: https://new.kenyalaw.org/wambugu\n\n"
+                                "Adverse possession requires open and continuous possession."
+                            ),
+                            "metadata": {
+                                "title": "Wambugu v Njuguna",
+                                "source": "Kenya Law",
+                                "source_url": "https://new.kenyalaw.org/wambugu",
+                                "neutral_citation": "[1983] KLR 172",
+                            },
+                            "score": 0.88,
+                        }
+                    ],
+                    "feedback": "PASS",
+                    "revision_count": 1,
+                    "passed_critique": True,
+                }
+
+        original_agent = drafting_service.legal_agent
+        drafting_service.legal_agent = FakeLegalAgent()
+        try:
+            async with self.Session() as db:
+                user = await self._create_user(db, "adverse@example.test")
+                matter = await service.create_matter(
+                    db,
+                    user.id,
+                    MatterCreate(case_number="ELC-adverse", division="ELC"),
+                )
+                matter.masked_facts = (
+                    "[APPLICANT] has openly occupied [LAND_REF] for over twelve years."
+                )
+                await service.transition_matter(db, matter, "facts_entered")
+                await service.transition_matter(db, matter, "pii_masked")
+                run = await drafting_service.create_drafting_run(
+                    db,
+                    matter=matter,
+                    request=DraftingRequest(
+                        matter_id=matter.id,
+                        jurisdiction="Environment and Land Court",
+                        subcategory="Adverse Possession",
+                    ),
+                )
+
+                completed = await drafting_service.execute_drafting_run(db, run.id)
+                refreshed = await service.get_user_matter(
+                    db, user_id=user.id, matter_id=matter.id, include_related=True
+                )
+
+                self.assertEqual(completed.status, "completed")
+                self.assertEqual(
+                    {document.document_type for document in refreshed.draft_documents},
+                    {
+                        "adverse_possession_originating_summons",
+                        "adverse_possession_supporting_affidavit",
+                    },
+                )
+                self.assertEqual(refreshed.citation_evidence[0].title, "Wambugu v Njuguna")
+                self.assertEqual(
+                    refreshed.citation_evidence[0].status,
+                    "pending",
+                )
+                linked_marks = [
+                    mark
+                    for document in refreshed.draft_documents
+                    for block in (document.editor_json or {}).get("content", [])
+                    for node in block.get("content", [])
+                    for mark in node.get("marks", [])
+                ]
+                self.assertTrue(
+                    any(
+                        mark.get("attrs", {}).get("evidenceId")
+                        == refreshed.citation_evidence[0].id
+                        for mark in linked_marks
+                    )
+                )
         finally:
             drafting_service.legal_agent = original_agent
 
@@ -726,6 +862,37 @@ class MatterWorkflowTests(unittest.IsolatedAsyncioTestCase):
                     run_id=run.id,
                 )
             self.assertEqual(not_found.exception.status_code, 404)
+
+    def test_drafting_retrieval_uses_kenya_law_namespace(self):
+        with patch("src.agent.graph.retrieve_context") as mocked_retrieve:
+            mocked_retrieve.return_value = [
+                {
+                    "text": "Retrieved authority",
+                    "metadata": {"title": "Authority"},
+                    "score": 0.9,
+                }
+            ]
+
+            result = retrieve_node(
+                {
+                    "request": {
+                        "jurisdiction": "Environment and Land Court",
+                        "subcategory": "Adverse Possession",
+                        "instructions": "Draft from masked facts.",
+                    },
+                    "context": [],
+                    "draft": "",
+                    "feedback": "",
+                    "revision_count": 0,
+                    "passed_critique": False,
+                }
+            )
+
+            self.assertEqual(result["context"][0]["text"], "Retrieved authority")
+            self.assertEqual(
+                mocked_retrieve.call_args.kwargs["namespace"],
+                kenyalaw_service.PINECONE_NAMESPACE,
+            )
 
     def test_elc_filter_accepts_land_matters_and_rejects_criminal_noise(self):
         self.assertTrue(

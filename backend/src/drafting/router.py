@@ -17,6 +17,7 @@ from src.drafting.schemas import (
     DraftingRunRead,
     GeneratedBlock,
 )
+from src.drafting.packets import canonical_subcategory, default_pleading_type
 from src.matters import service as matters_service
 
 router = APIRouter()
@@ -40,7 +41,10 @@ async def start_drafting_run(
         db, user_id=current_user.id, matter_id=request.matter_id
     )
     request.jurisdiction = request.jurisdiction or matter.jurisdiction or matter.division
-    request.subcategory = request.subcategory or matter.subcategory or "Temporary Injunction"
+    request.subcategory = canonical_subcategory(
+        request.subcategory or matter.subcategory or "Temporary Injunction"
+    )
+    request.pleading_type = request.pleading_type or default_pleading_type(request.subcategory)
     run = await drafting_service.create_drafting_run(db, matter=matter, request=request)
     background_tasks.add_task(drafting_service.run_drafting_background, run.id)
     return run
@@ -72,7 +76,10 @@ async def generate_draft(
         db, user_id=current_user.id, matter_id=request.matter_id
     )
     request.jurisdiction = request.jurisdiction or matter.jurisdiction or matter.division
-    request.subcategory = request.subcategory or matter.subcategory or "Temporary Injunction"
+    request.subcategory = canonical_subcategory(
+        request.subcategory or matter.subcategory or "Temporary Injunction"
+    )
+    request.pleading_type = request.pleading_type or default_pleading_type(request.subcategory)
 
     if not (matter.masked_facts or request.instructions or "").strip():
         matter.drafting_error = "empty_context"
