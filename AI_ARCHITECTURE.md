@@ -47,26 +47,28 @@ The single most critical integration inside LegalDocs is moving beyond zero-shot
 This is solved natively via the **LangGraph** engine operating within the FastAPI drafting route.
 
 ### Implementation specifics:
-- **Module:** `backend/app/services/agent/graph.py`
-- **State Definition (`AgentState`)**: The LangGraph utilizes a `TypedDict` structure strictly carrying `request` instructions, the Pinecone retrieved `context`, the current LLM `draft`, feedback from the critique stage `feedback`, and loop counters natively avoiding infinite loops.
-- **Node 1: Retrieve**: Runs LlamaIndex querying dynamically mapping the parameters configured from the Next.js `DraftingWorkspace` (e.g. *Adverse Possession* mapped to the *jurisdiction* rules). 
-- **Node 2: Draft**: Initializes `ChatOpenAI` models to process the precedent injected dynamically via Prompt Engineering. If previous `feedback` exists, it evaluates that feedback actively to repair issues in its output generation.
-- **Node 3: Critique Node**: Acts as the explicit validator for Kenyan Law submissions. It takes the outputted pleading from the draft node computationally holding it to an immense standard. If it lacks required jurisdictional parameters or misses contextual logic, the LLM outputs a rigorous failure sequence outlining what modifications are strictly required. Otherwise, it issues a definitive **"PASS"**.
+- **Module:** `backend/src/agent/graph.py`
+- **Model selection:** Drafting and critique use `OPENAI_DRAFTING_MODEL`, which defaults to `gpt-5.5`. Embeddings remain separately configured through `OPENAI_EMBEDDING_MODEL`.
+- **State Definition (`AgentState`)**: The LangGraph carries `request` instructions, Pinecone retrieved `context`, the current LLM `draft`, critique `feedback`, revision counters, pass/fail state, and typed safe `error_status` values.
+- **Node 1: Retrieve**: Runs LlamaIndex querying dynamically mapping the parameters configured from the Next.js `DraftingWorkspace` (e.g. *Adverse Possession* mapped to the *jurisdiction* rules). If no usable Kenya Law authority context is returned, the graph stops before generation with `retrieval_failed`.
+- **Node 2: Draft**: Initializes `ChatOpenAI` lazily and processes retrieved precedent with explicit prompt-injection boundaries. Matter facts and retrieved authorities are treated as untrusted source material, not instructions to follow.
+- **Node 3: Critique Node**: Acts as the explicit validator for Kenyan Law submissions. It reviews the draft alongside the original request and retrieved authority context, and it only passes on an exact **"PASS"** response.
 
 ### Dynamic State Routing:
-The graph utilizes a Conditional Edge `add_conditional_edges("critique", route_critique)`.
+The graph utilizes conditional edges after retrieval and critique.
 1. The AI attempts to draft the response.
 2. The AI critiques the drafted response.
 3. If Critique LLM says "FAIL: Context lacks test parameters", the system natively cycles back to the Draft logic, piping in the feedback loop iteratively ensuring the LLM patches its logic without human oversight.
-4. Yields precisely back to the UI ONLY when standard constraints are completely validated.
+4. If retrieval fails, the graph exits without drafting so the backend can record a safe `retrieval_failed` state.
+5. Yields back to the UI when standard constraints are validated or the bounded revision limit is reached for advocate review.
 
 ## 5. Connecting the Dots (FastAPI to Next.js)
 
-The resulting endpoint at `POST /api/drafting/generate` inside `backend/app/api/drafting.py` was fully converted to point natively into this exact graph pipeline mapping directly:
+The resulting endpoint at `POST /api/drafting/generate` inside `backend/src/drafting/router.py` was fully converted to point natively into this exact graph pipeline. The background drafting service invokes the graph off the async event loop:
 
 ```python
         # LangGraph Pipeline Execution
-        final_state = legal_agent.invoke(initial_state)
+        final_state = await asyncio.to_thread(legal_agent.invoke, initial_state)
 ```
 
 The React asynchronous architecture on the frontend hits this `generate_draft` endpoint successfully returning mapping dynamic responses—wherever they are legally verified or strictly drafted—bridging cutting-edge Agentic LLM logic reliably back to standard human user dashboards natively.
