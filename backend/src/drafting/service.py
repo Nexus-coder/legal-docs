@@ -60,6 +60,9 @@ def _classify_drafting_error(exc: Exception) -> str:
 
 
 def _drafting_status_from_state(final_state: dict) -> tuple[str, str | None]:
+    error_status = final_state.get("error_status")
+    if error_status:
+        return error_status, error_status
     if not final_state.get("draft", ""):
         return "malformed_output", "malformed_output"
     if (
@@ -641,7 +644,7 @@ async def execute_drafting_run(db: AsyncSession, run_id: int) -> DraftingRun | N
                 matter_instructions=instructions,
                 document_instruction=spec.instruction,
             )
-            final_state = legal_agent.invoke(initial_state)
+            final_state = await asyncio.to_thread(legal_agent.invoke, initial_state)
             retrieved_contexts.extend(_retrieved_contexts_from_state(final_state))
             await record_event(
                 db,
@@ -654,6 +657,15 @@ async def execute_drafting_run(db: AsyncSession, run_id: int) -> DraftingRun | N
 
             draft = final_state.get("draft", "")
             _document_response_status, error_status = _drafting_status_from_state(final_state)
+            if error_status == "retrieval_failed":
+                return await _fail_run(
+                    db,
+                    run,
+                    matter,
+                    stage="authorities",
+                    error_status=error_status,
+                    message="Drafting did not retrieve any authority context to ground the draft.",
+                )
             if error_status:
                 response_error_status = error_status
             if error_status == "malformed_output":

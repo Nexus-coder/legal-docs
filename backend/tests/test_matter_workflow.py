@@ -17,7 +17,7 @@ from src.drafting.editor import validate_editor_json
 from src.drafting.router import _classify_drafting_error, _drafting_status_from_state
 from src.drafting.schemas import DraftingRequest
 from src.drafting import service as drafting_service
-from src.agent.graph import retrieve_node
+from src.agent.graph import critique_node, retrieve_node
 from src.ingestion.indexer import (
     PineconeDimensionMismatch,
     embedding_safe_nodes,
@@ -583,6 +583,20 @@ class MatterWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status, "max_revisions_failed")
         self.assertEqual(error, "max_revisions_failed")
 
+    def test_retrieval_failure_state_is_safe_and_named(self):
+        status, error = _drafting_status_from_state(
+            {
+                "draft": "",
+                "context": [],
+                "error_status": "retrieval_failed",
+                "passed_critique": False,
+                "revision_count": 0,
+            }
+        )
+
+        self.assertEqual(status, "retrieval_failed")
+        self.assertEqual(error, "retrieval_failed")
+
     async def test_drafting_run_creation_records_started_event(self):
         async with self.Session() as db:
             user = await self._create_user(db)
@@ -893,6 +907,74 @@ class MatterWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 mocked_retrieve.call_args.kwargs["namespace"],
                 kenyalaw_service.PINECONE_NAMESPACE,
             )
+
+    def test_drafting_retrieval_fails_without_usable_authority_context(self):
+        with patch("src.agent.graph.retrieve_context") as mocked_retrieve:
+            mocked_retrieve.return_value = []
+
+            result = retrieve_node(
+                {
+                    "request": {
+                        "jurisdiction": "Environment and Land Court",
+                        "subcategory": "Adverse Possession",
+                        "instructions": "Draft from masked facts.",
+                    },
+                    "context": [],
+                    "draft": "",
+                    "feedback": "",
+                    "revision_count": 0,
+                    "passed_critique": False,
+                }
+            )
+
+            self.assertEqual(result["context"], [])
+            self.assertEqual(result["error_status"], "retrieval_failed")
+
+    def test_critique_is_grounded_in_request_and_context_and_requires_exact_pass(self):
+        class FakeLLM:
+            def __init__(self):
+                self.messages = None
+
+            def invoke(self, messages):
+                self.messages = messages
+
+                class Response:
+                    content = "PASS, but add a missing citation"
+
+                return Response()
+
+        fake_llm = FakeLLM()
+        with patch("src.agent.graph.get_llm", return_value=fake_llm):
+            result = critique_node(
+                {
+                    "request": {
+                        "jurisdiction": "Environment and Land Court",
+                        "subcategory": "Temporary Injunction",
+                        "instructions": "Preserve [LOCATION] pending hearing.",
+                    },
+                    "context": [
+                        {
+                            "text": "Giella requires a prima facie case.",
+                            "metadata": {
+                                "title": "Giella v Cassman Brown",
+                                "neutral_citation": "[1973] EA 358",
+                            },
+                            "score": 0.9,
+                        }
+                    ],
+                    "draft": "Draft pleading text.",
+                    "feedback": "",
+                    "revision_count": 1,
+                    "passed_critique": False,
+                }
+            )
+
+        critique_prompt = fake_llm.messages[-1].content
+        self.assertFalse(result["passed_critique"])
+        self.assertTrue(result["feedback"].startswith("FAIL: "))
+        self.assertIn("Preserve [LOCATION] pending hearing.", critique_prompt)
+        self.assertIn("Giella v Cassman Brown", critique_prompt)
+        self.assertIn("Giella requires a prima facie case.", critique_prompt)
 
     def test_elc_filter_accepts_land_matters_and_rejects_criminal_noise(self):
         self.assertTrue(

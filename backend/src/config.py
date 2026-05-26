@@ -13,6 +13,7 @@ class Settings(BaseSettings):
 
     # ── RAG Pipeline Configuration ────────────────────────────────────
     OPENAI_API_KEY: str
+    OPENAI_DRAFTING_MODEL: str = "gpt-5.5"
     OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
     PINECONE_API_KEY: str
     PINECONE_INDEX_NAME: str = "legal-docs"
