@@ -13,6 +13,21 @@ class DraftingRequest(CustomBaseModel):
     subcategory: str | None = None
     pleading_type: str | None = None
     instructions: str | None = None
+    selected_document_types: list[str] | None = None
+
+
+class DraftingPacketDocumentRead(CustomBaseModel):
+    document_type: str
+    title: str
+    activity_title: str
+    required: bool
+    selected_by_default: bool
+
+
+class DraftingPacketRead(CustomBaseModel):
+    subcategory: str
+    pleading_type: str
+    documents: list[DraftingPacketDocumentRead]
 
 
 class GeneratedBlock(CustomBaseModel):
@@ -39,6 +54,7 @@ class DraftingRunRead(CustomBaseModel):
     jurisdiction: str | None = None
     subcategory: str | None = None
     pleading_type: str | None = None
+    selected_document_types: list[str] | None = None
     error_status: str | None = None
     started_at: datetime
     finished_at: datetime | None = None

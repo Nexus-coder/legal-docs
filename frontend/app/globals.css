@@ -450,7 +450,7 @@ body.fullscreen-active main {
 
 .packet-item {
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   gap: 10px;
   align-items: center;
   width: 100%;
@@ -464,7 +464,7 @@ body.fullscreen-active main {
   transition: border-color 0.16s ease, background 0.16s ease;
 }
 
-.packet-item:not(:disabled):hover {
+.packet-item:hover {
   border-color: var(--color-brand-blue);
   background: #eff6ff;
 }
@@ -474,32 +474,30 @@ body.fullscreen-active main {
   border-color: var(--color-brand-blue);
 }
 
-.packet-item:disabled {
+.packet-item.unselected {
   opacity: 0.55;
-  cursor: not-allowed;
 }
 
-.packet-number {
-  width: 23px;
-  height: 23px;
-  border-radius: 7px;
-  display: grid;
-  place-items: center;
-  background: #ffffff;
-  border: 1px solid var(--color-border);
-  color: #475569;
-  font-family: var(--font-mono), monospace;
-  font-size: 11px;
-  font-weight: 600;
+.packet-item input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--color-brand-blue);
 }
 
-.packet-item.active .packet-number {
-  background: var(--color-brand-blue);
-  border-color: var(--color-brand-blue);
-  color: #ffffff;
+.packet-title-button {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  min-width: 0;
+  padding: 0;
+  text-align: left;
 }
 
 .packet-title {
+  display: block;
   min-width: 0;
   font-weight: 700;
   font-size: 13px;
@@ -1228,6 +1226,7 @@ body.fullscreen-active main {
   .packet-item .status-badge {
     grid-column: 2;
     justify-self: start;
+    margin-right: 6px;
   }
 }
 

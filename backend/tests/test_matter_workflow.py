@@ -17,6 +17,7 @@ from src.drafting.editor import validate_editor_json
 from src.drafting.router import _classify_drafting_error, _drafting_status_from_state
 from src.drafting.schemas import DraftingRequest
 from src.drafting import service as drafting_service
+from src.drafting.packets import drafting_packet_for, selected_document_specs
 from src.agent.graph import critique_node, retrieve_node
 from src.ingestion.indexer import (
     PineconeDimensionMismatch,
@@ -597,6 +598,31 @@ class MatterWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status, "retrieval_failed")
         self.assertEqual(error, "retrieval_failed")
 
+    def test_packet_selection_defaults_to_required_documents(self):
+        packet = drafting_packet_for(
+            subcategory="Temporary Injunction",
+            pleading_type=None,
+        )
+
+        default_documents = selected_document_specs(packet, None)
+        selected_documents = selected_document_specs(
+            packet,
+            ["injunction_certificate_of_urgency"],
+        )
+
+        self.assertEqual(
+            {document.document_type for document in default_documents},
+            {"injunction_motion", "supporting_affidavit"},
+        )
+        self.assertEqual(
+            {document.document_type for document in selected_documents},
+            {
+                "injunction_motion",
+                "supporting_affidavit",
+                "injunction_certificate_of_urgency",
+            },
+        )
+
     async def test_drafting_run_creation_records_started_event(self):
         async with self.Session() as db:
             user = await self._create_user(db)
@@ -815,6 +841,109 @@ class MatterWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 )
         finally:
             drafting_service.legal_agent = original_agent
+
+    async def test_selected_optional_packet_document_is_generated(self):
+        class FakeLegalAgent:
+            def invoke(self, state):
+                instructions = state["request"]["instructions"]
+                if "Certificate of Urgency" in instructions:
+                    title = "Certificate of Urgency"
+                elif "Supporting Affidavit" in instructions:
+                    title = "Supporting Affidavit"
+                else:
+                    title = "Notice of Motion"
+                return {
+                    "draft": (
+                        f"{title} draft relying on Ngure v Kiragu [2026] KEELC 2847."
+                    ),
+                    "context": [
+                        {
+                            "text": "Temporary injunction authority context.",
+                            "metadata": {
+                                "title": "Ngure v Kiragu",
+                                "source_url": "https://new.kenyalaw.org/ngure",
+                                "neutral_citation": "[2026] KEELC 2847",
+                            },
+                            "score": 0.91,
+                        }
+                    ],
+                    "feedback": "PASS",
+                    "revision_count": 1,
+                    "passed_critique": True,
+                }
+
+        original_agent = drafting_service.legal_agent
+        drafting_service.legal_agent = FakeLegalAgent()
+        try:
+            async with self.Session() as db:
+                user = await self._create_user(db, "optional-doc@example.test")
+                matter = await service.create_matter(
+                    db,
+                    user.id,
+                    MatterCreate(case_number="ELC-optional-doc", division="ELC"),
+                )
+                matter.masked_facts = "[PERSON] faces urgent interference with [LOCATION]."
+                await service.transition_matter(db, matter, "facts_entered")
+                await service.transition_matter(db, matter, "pii_masked")
+                run = await drafting_service.create_drafting_run(
+                    db,
+                    matter=matter,
+                    request=DraftingRequest(
+                        matter_id=matter.id,
+                        jurisdiction="Environment and Land Court",
+                        subcategory="Temporary Injunction",
+                        selected_document_types=[
+                            "injunction_motion",
+                            "supporting_affidavit",
+                            "injunction_certificate_of_urgency",
+                        ],
+                    ),
+                )
+
+                completed = await drafting_service.execute_drafting_run(db, run.id)
+                refreshed = await service.get_user_matter(
+                    db, user_id=user.id, matter_id=matter.id, include_related=True
+                )
+
+                self.assertEqual(completed.status, "completed")
+                self.assertEqual(
+                    {document.document_type for document in refreshed.draft_documents},
+                    {
+                        "injunction_motion",
+                        "supporting_affidavit",
+                        "injunction_certificate_of_urgency",
+                    },
+                )
+        finally:
+            drafting_service.legal_agent = original_agent
+
+    async def test_unsupported_selected_packet_document_fails_before_drafting(self):
+        async with self.Session() as db:
+            user = await self._create_user(db, "unsupported-doc@example.test")
+            matter = await service.create_matter(
+                db,
+                user.id,
+                MatterCreate(case_number="ELC-unsupported-doc", division="ELC"),
+            )
+            matter.masked_facts = "[PERSON] seeks interim protection over [LOCATION]."
+            run = await drafting_service.create_drafting_run(
+                db,
+                matter=matter,
+                request=DraftingRequest(
+                    matter_id=matter.id,
+                    jurisdiction="Environment and Land Court",
+                    subcategory="Temporary Injunction",
+                    selected_document_types=["unsupported_packet_document"],
+                ),
+            )
+
+            failed = await drafting_service.execute_drafting_run(db, run.id)
+            events = await drafting_service.get_drafting_events(db, run.id)
+
+            self.assertEqual(failed.status, "failed")
+            self.assertEqual(failed.error_status, "unsupported_document_type")
+            self.assertEqual(events[-1].stage, "select_packet")
+            self.assertEqual(events[-1].error_type, "unsupported_document_type")
 
     async def test_failed_drafting_run_records_safe_error_event(self):
         async with self.Session() as db:

@@ -9,6 +9,7 @@ class DraftDocumentSpec:
     title: str
     activity_title: str
     instruction: str
+    required: bool = True
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,40 @@ INJUNCTION_PACKET = DraftingPacket(
                 "submissions or grounds."
             ),
         ),
+        DraftDocumentSpec(
+            document_type="injunction_certificate_of_urgency",
+            title="Certificate of Urgency",
+            activity_title="Drafting Certificate of Urgency",
+            instruction=(
+                "Draft a Certificate of Urgency for the temporary injunction application. "
+                "Use only facts showing immediate risk or irreparable harm, identify why "
+                "ordinary scheduling is inadequate, and avoid exaggerating urgency beyond "
+                "the masked facts."
+            ),
+            required=False,
+        ),
+        DraftDocumentSpec(
+            document_type="injunction_draft_order",
+            title="Draft Order for Temporary Injunction",
+            activity_title="Drafting Draft Order",
+            instruction=(
+                "Draft a concise Draft Order for the temporary injunction application. "
+                "Mirror the prayers sought in the Notice of Motion, preserve clear party "
+                "obligations, and avoid adding relief not supported by the masked facts."
+            ),
+            required=False,
+        ),
+        DraftDocumentSpec(
+            document_type="injunction_written_submissions",
+            title="Written Submissions on Temporary Injunction",
+            activity_title="Drafting Written Submissions",
+            instruction=(
+                "Draft short written submissions for the temporary injunction application. "
+                "Organize the argument around the applicable Kenyan injunction principles, "
+                "connect each issue to the masked facts, and cite retrieved authorities only."
+            ),
+            required=False,
+        ),
     ),
 )
 
@@ -80,6 +115,28 @@ ADVERSE_POSSESSION_PACKET = DraftingPacket(
                 "only as supplied by the masked facts."
             ),
         ),
+        DraftDocumentSpec(
+            document_type="adverse_possession_draft_order",
+            title="Draft Order for Adverse Possession",
+            activity_title="Drafting Draft Order",
+            instruction=(
+                "Draft a Draft Order for the adverse possession summons. Keep the orders "
+                "aligned to the questions and relief in the Originating Summons, and do "
+                "not add land registration directions unsupported by the masked facts."
+            ),
+            required=False,
+        ),
+        DraftDocumentSpec(
+            document_type="adverse_possession_written_submissions",
+            title="Written Submissions on Adverse Possession",
+            activity_title="Drafting Written Submissions",
+            instruction=(
+                "Draft written submissions for adverse possession. Address possession, "
+                "continuity, openness, exclusivity, interruption, and the statutory period "
+                "using the masked facts and retrieved Kenyan authorities."
+            ),
+            required=False,
+        ),
     ),
 )
 
@@ -109,6 +166,28 @@ TRESPASS_PLAINT_PACKET = DraftingPacket(
                 "adding facts, dates, exhibits, or valuation details not supplied."
             ),
         ),
+        DraftDocumentSpec(
+            document_type="trespass_witness_statement",
+            title="Witness Statement",
+            activity_title="Drafting Witness Statement",
+            instruction=(
+                "Draft a factual witness statement for the trespass or eviction claim. "
+                "Use first-person chronology, preserve anonymized names and land references, "
+                "and avoid legal argument or unsupported valuation details."
+            ),
+            required=False,
+        ),
+        DraftDocumentSpec(
+            document_type="trespass_list_of_documents",
+            title="List of Documents",
+            activity_title="Drafting List of Documents",
+            instruction=(
+                "Draft a List of Documents for the trespass or eviction claim. Include "
+                "only document categories or exhibits clearly supported by the masked facts, "
+                "and mark uncertain items as subject to advocate confirmation."
+            ),
+            required=False,
+        ),
     ),
 )
 
@@ -136,6 +215,28 @@ BOUNDARY_TITLE_PLAINT_PACKET = DraftingPacket(
                 "Draft a Verifying Affidavit for the plaint. Keep it factual, numbered, "
                 "and limited to confirming the pleadings and the supplied masked facts."
             ),
+        ),
+        DraftDocumentSpec(
+            document_type="boundary_title_witness_statement",
+            title="Witness Statement",
+            activity_title="Drafting Witness Statement",
+            instruction=(
+                "Draft a factual witness statement for the boundary or title dispute. "
+                "Keep the account neutral on disputed ownership, preserve the chronology, "
+                "and avoid inventing survey or registry evidence."
+            ),
+            required=False,
+        ),
+        DraftDocumentSpec(
+            document_type="boundary_title_list_of_documents",
+            title="List of Documents",
+            activity_title="Drafting List of Documents",
+            instruction=(
+                "Draft a List of Documents for the boundary or title dispute. Include "
+                "only title, survey, registry, correspondence, or occupation evidence "
+                "that is supported by the masked facts."
+            ),
+            required=False,
         ),
     ),
 )
@@ -165,6 +266,28 @@ PROCEDURAL_APPLICATION_PACKET = DraftingPacket(
                 "numbered factual depositions, explain the procedural history from the "
                 "masked facts, and avoid unsupported merits arguments or invented dates."
             ),
+        ),
+        DraftDocumentSpec(
+            document_type="procedural_draft_order",
+            title="Draft Order for Procedural Relief",
+            activity_title="Drafting Draft Order",
+            instruction=(
+                "Draft a Draft Order for the procedural application. Mirror the procedural "
+                "relief sought, keep deadlines and obligations clear, and avoid adding "
+                "orders not supported by the masked facts."
+            ),
+            required=False,
+        ),
+        DraftDocumentSpec(
+            document_type="procedural_written_submissions",
+            title="Written Submissions on Procedural Relief",
+            activity_title="Drafting Written Submissions",
+            instruction=(
+                "Draft concise written submissions for the procedural application. Tie "
+                "the procedural history to the requested relief and retrieved Kenyan "
+                "authorities without arguing unsupported merits."
+            ),
+            required=False,
         ),
     ),
 )
@@ -197,6 +320,28 @@ APPLICATION_PACKETS = {
                     "valuation figures, or dates."
                 ),
             ),
+            DraftDocumentSpec(
+                document_type="trespass_application_draft_order",
+                title="Draft Order for Trespass or Eviction Relief",
+                activity_title="Drafting Draft Order",
+                instruction=(
+                    "Draft a Draft Order for the trespass or eviction application. "
+                    "Mirror the interim prayers, keep obligations clear, and avoid "
+                    "final eviction relief unless the masked facts and application type support it."
+                ),
+                required=False,
+            ),
+            DraftDocumentSpec(
+                document_type="trespass_application_written_submissions",
+                title="Written Submissions on Trespass or Eviction Relief",
+                activity_title="Drafting Written Submissions",
+                instruction=(
+                    "Draft concise written submissions for the trespass or eviction "
+                    "application. Connect the interim relief sought to the masked facts "
+                    "and retrieved Kenyan authorities."
+                ),
+                required=False,
+            ),
         ),
     ),
     ("Boundary/Title Dispute", NOTICE_OF_MOTION_AND_AFFIDAVIT): DraftingPacket(
@@ -224,6 +369,28 @@ APPLICATION_PACKETS = {
                     "neutral, and do not invent survey reports, registry entries, or "
                     "fraud allegations not supplied in the masked facts."
                 ),
+            ),
+            DraftDocumentSpec(
+                document_type="boundary_title_application_draft_order",
+                title="Draft Order for Boundary or Title Preservation",
+                activity_title="Drafting Draft Order",
+                instruction=(
+                    "Draft a Draft Order for the boundary or title preservation application. "
+                    "Mirror the preservation prayers and avoid resolving ownership or survey "
+                    "issues not proved by the masked facts."
+                ),
+                required=False,
+            ),
+            DraftDocumentSpec(
+                document_type="boundary_title_application_written_submissions",
+                title="Written Submissions on Boundary or Title Preservation",
+                activity_title="Drafting Written Submissions",
+                instruction=(
+                    "Draft concise written submissions for the preservation application. "
+                    "Tie the need for interim preservation to the masked facts and retrieved "
+                    "Kenyan authorities."
+                ),
+                required=False,
             ),
         ),
     ),
@@ -284,6 +451,29 @@ def drafting_packet_for(
     resolved_subcategory = canonical_subcategory(subcategory)
     resolved_pleading_type = pleading_type or default_pleading_type(resolved_subcategory)
     return _PACKETS_BY_KEY.get((resolved_subcategory, resolved_pleading_type))
+
+
+def selected_document_specs(
+    packet: DraftingPacket,
+    selected_document_types: list[str] | None,
+) -> tuple[DraftDocumentSpec, ...]:
+    if not selected_document_types:
+        return tuple(spec for spec in packet.documents if spec.required)
+
+    selected = set(selected_document_types)
+    required_types = {spec.document_type for spec in packet.documents if spec.required}
+    selected.update(required_types)
+    return tuple(spec for spec in packet.documents if spec.document_type in selected)
+
+
+def unsupported_document_types(
+    packet: DraftingPacket,
+    selected_document_types: list[str] | None,
+) -> set[str]:
+    if not selected_document_types:
+        return set()
+    available = {spec.document_type for spec in packet.documents}
+    return set(selected_document_types) - available
 
 
 def supported_subcategories() -> set[str]:

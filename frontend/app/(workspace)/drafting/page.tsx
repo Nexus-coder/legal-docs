@@ -59,65 +59,90 @@ type DraftingEvent = {
 type PacketDocument = {
   document_type: string;
   title: string;
-  subtitle: string;
-  enabled: boolean;
+  activity_title: string;
+  required: boolean;
+  selected_by_default: boolean;
+};
+
+type DraftingPacket = {
+  subcategory: string;
+  pleading_type: string;
+  documents: PacketDocument[];
+};
+
+type GenerationStep = {
+  key: string;
+  label: string;
 };
 
 type ActivityState = "pending" | "active" | "complete" | "error";
 type MobilePanel = "control" | "draft" | "review";
 type ConnectionState = "idle" | "connecting" | "live" | "reconnecting" | "completed" | "failed";
 
-const PACKET_DOCUMENTS: PacketDocument[] = [
+const FALLBACK_PACKET_DOCUMENTS: PacketDocument[] = [
   {
     document_type: "injunction_motion",
     title: "Notice of Motion",
-    subtitle: "Active application document",
-    enabled: true,
+    activity_title: "Drafting Notice of Motion",
+    required: true,
+    selected_by_default: true,
   },
   {
     document_type: "supporting_affidavit",
     title: "Supporting Affidavit",
-    subtitle: "Facts and exhibit narrative",
-    enabled: true,
+    activity_title: "Drafting Supporting Affidavit",
+    required: true,
+    selected_by_default: true,
   },
   {
-    document_type: "certificate_of_urgency",
+    document_type: "injunction_certificate_of_urgency",
     title: "Certificate of Urgency",
-    subtitle: "Future slot",
-    enabled: false,
+    activity_title: "Drafting Certificate of Urgency",
+    required: false,
+    selected_by_default: false,
   },
   {
-    document_type: "draft_order",
+    document_type: "injunction_draft_order",
     title: "Draft Order",
-    subtitle: "Future slot",
-    enabled: false,
+    activity_title: "Drafting Draft Order",
+    required: false,
+    selected_by_default: false,
   },
   {
-    document_type: "submissions",
-    title: "Submissions",
-    subtitle: "Future slot",
-    enabled: false,
+    document_type: "injunction_written_submissions",
+    title: "Written Submissions",
+    activity_title: "Drafting Written Submissions",
+    required: false,
+    selected_by_default: false,
   },
 ];
 
-function packetDocumentsFor(draftDocuments: DraftDocument[]): PacketDocument[] {
-  if (!draftDocuments.length) return PACKET_DOCUMENTS;
-  return draftDocuments.map((document) => ({
-    document_type: document.document_type,
-    title: document.title,
-    subtitle: document.content ? "Generated from masked facts" : "Awaiting generated content",
-    enabled: true,
-  }));
+function selectedTypesFromPacket(documents: PacketDocument[]) {
+  return documents
+    .filter((document) => document.required || document.selected_by_default)
+    .map((document) => document.document_type);
 }
 
-const GENERATION_STEPS = [
-  "Reading masked facts",
-  "Searching Kenyan authorities",
-  "Drafting Notice of Motion",
-  "Drafting Supporting Affidavit",
-  "Running critique",
-  "Ready for advocate review",
-];
+function generationStepsFor(documents: PacketDocument[], selectedTypes: Set<string>): GenerationStep[] {
+  const selectedDocuments = documents.filter(
+    (document) => document.required || selectedTypes.has(document.document_type),
+  );
+  return [
+    { key: "read_facts", label: "Reading masked facts" },
+    { key: "authorities", label: "Searching Kenyan authorities" },
+    ...selectedDocuments.map((document) => ({
+      key: document.document_type,
+      label: document.activity_title,
+    })),
+    { key: "critique", label: "Running critique" },
+    { key: "completed", label: "Ready for advocate review" },
+  ];
+}
+
+const FALLBACK_GENERATION_STEPS = generationStepsFor(
+  FALLBACK_PACKET_DOCUMENTS,
+  new Set(selectedTypesFromPacket(FALLBACK_PACKET_DOCUMENTS)),
+);
 
 const terminalEvents = new Set(["completed", "failed"]);
 
@@ -152,8 +177,8 @@ function getStatusVariant(status?: string | null): "blue" | "green" | "amber" | 
   return "slate";
 }
 
-function statusLabel(status?: string | null, enabled = true) {
-  if (!enabled) return "Future";
+function statusLabel(status?: string | null, selected = true) {
+  if (!selected) return "Not selected";
   if (!status) return "Not generated";
   return status.replaceAll("_", " ");
 }
@@ -182,24 +207,29 @@ function connectionClass(connection: ConnectionState, loading: boolean) {
   return "status-slate";
 }
 
-function activeStepFromEvents(events: DraftingEvent[], hasDocuments: boolean, connection: ConnectionState, loading: boolean) {
+function activeStepFromEvents(
+  events: DraftingEvent[],
+  hasDocuments: boolean,
+  connection: ConnectionState,
+  loading: boolean,
+  generationSteps: GenerationStep[],
+) {
   if (loading) return 0;
-  if (connection === "completed") return GENERATION_STEPS.length - 1;
+  if (connection === "completed") return generationSteps.length - 1;
   const latest = events.at(-1);
-  if (!latest) return hasDocuments && connection === "idle" ? GENERATION_STEPS.length - 1 : 0;
-  if (latest.event_type === "failed") return stageIndex(latest.stage);
-  if (latest.event_type === "completed") return GENERATION_STEPS.length - 1;
-  if (hasDocuments && connection === "idle") return GENERATION_STEPS.length - 1;
-  return stageIndex(latest.stage);
+  if (!latest) return hasDocuments && connection === "idle" ? generationSteps.length - 1 : 0;
+  if (latest.event_type === "failed") return stageIndex(latest.stage, generationSteps);
+  if (latest.event_type === "completed") return generationSteps.length - 1;
+  if (hasDocuments && connection === "idle") return generationSteps.length - 1;
+  return stageIndex(latest.stage, generationSteps);
 }
 
-function stageIndex(stage: string) {
+function stageIndex(stage: string, generationSteps: GenerationStep[]) {
   if (stage === "read_facts" || stage === "start") return 0;
   if (stage === "authorities") return 1;
-  if (stage === "injunction_motion") return 2;
-  if (stage === "supporting_affidavit") return 3;
-  if (stage === "critique") return 4;
-  if (stage === "completed") return 5;
+  const index = generationSteps.findIndex((step) => step.key === stage);
+  if (index >= 0) return index;
+  if (stage === "completed") return generationSteps.length - 1;
   return 0;
 }
 
@@ -259,12 +289,15 @@ function DraftingWorkspaceContent() {
   const [error, setError] = useState<string | null>(null);
   const [activeRun, setActiveRun] = useState<DraftingRun | null>(null);
   const [events, setEvents] = useState<DraftingEvent[]>([]);
+  const [packet, setPacket] = useState<DraftingPacket | null>(null);
+  const [selectedDocumentTypes, setSelectedDocumentTypes] = useState<Set<string>>(
+    () => new Set(selectedTypesFromPacket(FALLBACK_PACKET_DOCUMENTS)),
+  );
   const [connection, setConnection] = useState<ConnectionState>("idle");
   const [isFullscreen, setIsFullscreen] = useState(false);
   const eventSourceRef = useRef<EventSource | null>(null);
   const streamRunIdRef = useRef<number | null>(null);
   const terminalEventSeenRef = useRef(false);
-  const autoStartedMatterRef = useRef<number | null>(null);
   const matterRef = useRef<Matter | null>(null);
 
   useEffect(() => {
@@ -317,6 +350,42 @@ function DraftingWorkspaceContent() {
     }
   }, [authHeaders, matterId]);
 
+  const loadDraftingPacket = useCallback(async (sourceMatter: Matter) => {
+    const params = new URLSearchParams({
+      subcategory: sourceMatter.subcategory || "Temporary Injunction",
+    });
+    const res = await fetch(`${API_BASE_URL}drafting/packet?${params.toString()}`, {
+      headers: authHeaders,
+      credentials: "include",
+    });
+    if (!res.ok) {
+      setPacket(null);
+      setSelectedDocumentTypes(new Set(selectedTypesFromPacket(FALLBACK_PACKET_DOCUMENTS)));
+      return;
+    }
+    const data = (await res.json()) as DraftingPacket;
+    setPacket(data);
+    const existingDocumentTypes = new Set(
+      (sourceMatter.draft_documents || []).map((document) => document.document_type),
+    );
+    setActiveDocumentType((current) => {
+      if (data.documents.some((document) => document.document_type === current)) return current;
+      const firstGeneratedDocument = data.documents.find((document) =>
+        existingDocumentTypes.has(document.document_type),
+      );
+      return firstGeneratedDocument?.document_type || data.documents[0]?.document_type || current;
+    });
+    setSelectedDocumentTypes(
+      new Set(
+        existingDocumentTypes.size
+          ? data.documents
+              .filter((document) => document.required || existingDocumentTypes.has(document.document_type))
+              .map((document) => document.document_type)
+          : selectedTypesFromPacket(data.documents),
+      ),
+    );
+  }, [authHeaders]);
+
   const connectToRun = useCallback((runId: number) => {
     if (eventSourceRef.current && streamRunIdRef.current === runId) return;
     closeStream();
@@ -363,6 +432,10 @@ function DraftingWorkspaceContent() {
   const startDrafting = useCallback(async (sourceMatter?: Matter | null) => {
     const targetMatter = sourceMatter ?? matterRef.current;
     if (!targetMatter || targetMatter.workflow_state === "loading") return;
+    const packetDocuments = packet?.documents.length ? packet.documents : FALLBACK_PACKET_DOCUMENTS;
+    const selectedTypes = packetDocuments
+      .filter((document) => document.required || selectedDocumentTypes.has(document.document_type))
+      .map((document) => document.document_type);
     setGenerating(true);
     setError(null);
     setEvents([]);
@@ -376,6 +449,8 @@ function DraftingWorkspaceContent() {
           matter_id: targetMatter.id,
           jurisdiction: targetMatter.jurisdiction || targetMatter.division,
           subcategory: targetMatter.subcategory || "Temporary Injunction",
+          pleading_type: packet?.pleading_type,
+          selected_document_types: selectedTypes,
         }),
       });
       const data = await res.json();
@@ -387,7 +462,7 @@ function DraftingWorkspaceContent() {
       setGenerating(false);
       setError(err instanceof Error ? err.message : "Draft generation failed");
     }
-  }, [authHeaders, connectToRun]);
+  }, [authHeaders, connectToRun, packet, selectedDocumentTypes]);
 
   useEffect(() => {
     const load = async () => {
@@ -405,15 +480,7 @@ function DraftingWorkspaceContent() {
         if (!res.ok) throw new Error("Matter not found");
         const data: Matter = await res.json();
         setMatter(data);
-        if (
-          data.workflow_state === "pii_masked" &&
-          !(data.draft_documents || []).length &&
-          !data.draft_content &&
-          autoStartedMatterRef.current !== data.id
-        ) {
-          autoStartedMatterRef.current = data.id;
-          void startDrafting(data);
-        }
+        void loadDraftingPacket(data);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Could not load matter");
       } finally {
@@ -422,7 +489,7 @@ function DraftingWorkspaceContent() {
     };
     void load();
     return closeStream;
-  }, [authHeaders, closeStream, matterId, startDrafting]);
+  }, [authHeaders, closeStream, loadDraftingPacket, matterId]);
 
   const verifyCitations = async () => {
     if (!matter) return;
@@ -461,9 +528,35 @@ function DraftingWorkspaceContent() {
     });
   }, []);
 
+  const toggleOptionalDocument = useCallback((documentType: string) => {
+    setSelectedDocumentTypes((current) => {
+      const next = new Set(current);
+      if (next.has(documentType)) {
+        next.delete(documentType);
+      } else {
+        next.add(documentType);
+      }
+      return next;
+    });
+  }, []);
+
   const packetDocuments = useMemo(
-    () => packetDocumentsFor(matter?.draft_documents || []),
-    [matter?.draft_documents],
+    () => packet?.documents.length ? packet.documents : FALLBACK_PACKET_DOCUMENTS,
+    [packet],
+  );
+  const selectedPacketTypes = useMemo(
+    () => new Set([
+      ...packetDocuments.filter((document) => document.required).map((document) => document.document_type),
+      ...selectedDocumentTypes,
+    ]),
+    [packetDocuments, selectedDocumentTypes],
+  );
+  const selectedCount = packetDocuments.filter((document) =>
+    selectedPacketTypes.has(document.document_type),
+  ).length;
+  const generationSteps = useMemo(
+    () => generationStepsFor(packetDocuments, selectedPacketTypes),
+    [packetDocuments, selectedPacketTypes],
   );
 
   useEffect(() => {
@@ -496,7 +589,13 @@ function DraftingWorkspaceContent() {
   const activePacketItem = packetDocuments.find((document) => document.document_type === activeDocumentType);
   const hasDocuments = documents.some((document) => document.content);
   const isDrafting = loading || generating || connection === "connecting" || connection === "live" || connection === "reconnecting";
-  const activeGenerationStep = activeStepFromEvents(events, hasDocuments, connection, loading);
+  const activeGenerationStep = activeStepFromEvents(
+    events,
+    hasDocuments,
+    connection,
+    loading,
+    generationSteps,
+  );
   const hasGenerationError = connection === "failed" || Boolean(error && !hasDocuments && !loading);
   const progress = displayMatter.verification_total
     ? Math.round((displayMatter.verification_done / displayMatter.verification_total) * 100)
@@ -549,28 +648,53 @@ function DraftingWorkspaceContent() {
           </div>
 
           <div className="drafting-rail-section">
-            <CardLabel className="mb-4">Filing packet</CardLabel>
+            <div className="rail-heading-row mb-4">
+              <CardLabel>Filing packet</CardLabel>
+              <span className="mono-text text-slate-400">{selectedCount} selected</span>
+            </div>
             <div className="packet-list">
-              {packetDocuments.map((document, index) => {
+              {packetDocuments.map((document) => {
                 const draftDocument = documents.find((item) => item.document_type === document.document_type);
                 const isActive = activeDocumentType === document.document_type;
+                const isSelected = selectedPacketTypes.has(document.document_type);
+                const selectionLocked = isDrafting || hasDocuments;
                 return (
-                  <button
+                  <div
                     key={document.document_type}
-                    type="button"
-                    onClick={() => document.enabled && setActiveDocumentType(document.document_type)}
-                    disabled={!document.enabled}
-                    className={`packet-item ${isActive ? "active" : ""}`}
+                    className={`packet-item ${isActive ? "active" : ""} ${!isSelected ? "unselected" : ""}`}
                   >
-                    <span className="packet-number">{index + 1}</span>
-                    <span className="packet-title">
-                      {document.title}
-                      <span className="packet-subtitle">{draftDocument?.content ? "Generated from masked facts" : document.subtitle}</span>
-                    </span>
-                    <Badge variant={getStatusVariant(draftDocument?.status)}>
-                      {statusLabel(draftDocument?.status, document.enabled)}
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      disabled={document.required || selectionLocked}
+                      onChange={() => toggleOptionalDocument(document.document_type)}
+                      aria-label={`${isSelected ? "Remove" : "Add"} ${document.title}`}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setActiveDocumentType(document.document_type)}
+                      className="packet-title-button"
+                    >
+                      <span className="packet-title">
+                        {document.title}
+                        <span className="packet-subtitle">
+                          {draftDocument?.content
+                            ? "Generated from masked facts"
+                            : document.required
+                              ? "Required filing document"
+                              : isSelected
+                                ? "Optional document selected"
+                                : "Optional document available"}
+                        </span>
+                      </span>
+                    </button>
+                    <Badge variant={document.required ? "blue" : isSelected ? "amber" : "slate"}>
+                      {document.required ? "Required" : isSelected ? "Optional" : "Skipped"}
                     </Badge>
-                  </button>
+                    <Badge variant={getStatusVariant(draftDocument?.status)}>
+                      {statusLabel(draftDocument?.status, isSelected)}
+                    </Badge>
+                  </div>
                 );
               })}
             </div>
@@ -582,7 +706,7 @@ function DraftingWorkspaceContent() {
               <span className="mono-text text-slate-400">{runLabel}</span>
             </div>
             <div className="activity-stack mt-4" aria-live="polite">
-              {GENERATION_STEPS.map((step, index) => {
+              {generationSteps.map((step, index) => {
                 const state = generationStepState({
                   index,
                   activeStep: activeGenerationStep,
@@ -591,10 +715,10 @@ function DraftingWorkspaceContent() {
                   hasError: hasGenerationError,
                 });
                 return (
-                  <div key={step} className={`activity-step ${state}`}>
+                  <div key={step.key} className={`activity-step ${state}`}>
                     <span className="activity-icon">{activityIcon(state, index)}</span>
                     <span>
-                      <span className="font-medium">{step}</span>
+                      <span className="font-medium">{step.label}</span>
                       {index === activeGenerationStep && latestEvent?.message ? (
                         <span className="activity-detail">{latestEvent.message}</span>
                       ) : null}
@@ -685,12 +809,12 @@ function DraftingWorkspaceContent() {
                     </h3>
                     <p className="text-slate-500 mb-6">
                       {isDrafting
-                        ? "The desk is preparing the drafting packet from masked matter facts."
-                        : "Generate the drafting packet for this matter."}
+                        ? "The desk is preparing the selected filing packet from masked matter facts."
+                        : "Choose any optional documents, then generate the filing packet for this matter."}
                     </p>
                     {!isDrafting && (
                       <Button onClick={() => startDrafting()} size="lg" disabled={!matter}>
-                        Generate Draft Packet
+                        Generate {selectedCount} Document{selectedCount === 1 ? "" : "s"}
                       </Button>
                     )}
                   </div>
@@ -810,6 +934,8 @@ function readableDraftingError(errorStatus: string) {
     empty_context: "No masked matter facts were available for drafting.",
     retrieval_failed: "Kenyan authority retrieval failed. Retry the run before relying on the draft.",
     unsupported_subcategory: "This matter type is not configured for automated drafting yet.",
+    unsupported_document_type: "One selected document is not available for this filing packet.",
+    empty_document_selection: "No drafting documents were selected for generation.",
     model_failed: "The drafting model did not complete. Retry when the model is available.",
     max_revisions_failed: "Draft generated, but the critique loop reached its revision limit. Review the draft manually before relying on it.",
     malformed_output: "Drafting finished with an unreadable model output.",
@@ -844,10 +970,10 @@ function DraftingShellSkeleton() {
           <div className="drafting-rail-section">
             <CardLabel className="mb-4">Generation activity</CardLabel>
             <div className="activity-stack" aria-live="polite">
-              {GENERATION_STEPS.map((step, index) => (
-                <div key={step} className={`activity-step ${index === 0 ? "active" : "pending"}`}>
+              {FALLBACK_GENERATION_STEPS.map((step, index) => (
+                <div key={step.key} className={`activity-step ${index === 0 ? "active" : "pending"}`}>
                   <span className="activity-icon">{index === 0 ? "..." : index + 1}</span>
-                  <span className="font-medium">{step}</span>
+                  <span className="font-medium">{step.label}</span>
                 </div>
               ))}
             </div>
