@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.1.0] - 2026-05-26
+
+### Changed
+
+- Legal drafting now defaults to the configurable `gpt-5.5` drafting model while keeping the existing embedding index unchanged.
+- The drafting agent now grounds critique against the original request, matter instructions, and retrieved Kenya Law context.
+- Drafting runs now move blocking model and retrieval work off the async event loop.
+
+### Fixed
+
+- Drafting now fails safely with `retrieval_failed` before generating documents when no usable authority context is retrieved.
+- Critique now only passes on an exact `PASS` response instead of accepting partial pass text with unresolved issues.
+- Draft prompts now mark matter facts and retrieved authorities as untrusted source material to reduce prompt-injection risk.
+
 ## [0.2.0.0] - 2026-05-26
 
 ### Added
